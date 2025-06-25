@@ -1,0 +1,30 @@
+{
+  "learning_parameters": {
+    "optimization_confidence_threshold": 0.7,
+    "max_parameter_change_percent": 50,
+    "learning_lookback_days": 30,
+    "min_trades_for_optimization": 20,
+    "parameter_change_cooldown_hours": 6
+  },
+  "risk_controls": {
+    "max_ai_suggested_position_size": 100,
+    "ai_suggestion_cooldown_hours": 6,
+    "human_approval_required_for": [
+      "risk_optimization", 
+      "major_parameter_changes",
+      "strategy_modifications"
+    ],
+    "auto_apply_threshold": 0.85
+  },
+  "market_analysis": {
+    "sentiment_weight": 0.3,
+    "technical_weight": 0.5,
+    "news_weight": 0.2,
+    "volume_weight": 0.1
+  },
+  "optimization_targets": {
+    "primary_metric": "sharpe_ratio",
+    "secondary_metrics": ["total_return", "max_drawdown", "win_rate"],
+    "min_improvement_threshold": 0.05
+  }
+}

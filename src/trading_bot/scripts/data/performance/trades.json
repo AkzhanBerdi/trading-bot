@@ -1,0 +1,15 @@
+[
+  {
+    "timestamp": "2025-06-20T17:03:28.714014",
+    "symbol": "SOLUSDT",
+    "side": "BUY",
+    "quantity": 1.0,
+    "price": 100.0,
+    "value": 100.0,
+    "strategy": "grid",
+    "fees": 0.1,
+    "pnl": 0.0,
+    "portfolio_value_before": 1000.0,
+    "portfolio_value_after": 1000.0
+  }
+]
