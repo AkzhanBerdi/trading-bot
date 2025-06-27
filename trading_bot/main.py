@@ -8,7 +8,6 @@ from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
-
 from utils.enhanced_trade_logger import EnhancedTradeLogger
 from utils.grid_persistence import GridStatePersistence
 from utils.telegram_commands import TelegramBotCommands
@@ -44,7 +43,6 @@ env_loaded = find_and_load_env()
 
 # Local imports (using relative paths for your directory structure)
 from strategies.grid_trading import GridTrader
-from strategies.render_signals import RenderSignalTrader
 from utils.binance_client import BinanceManager
 
 # Import telegram notifier after env is loaded
@@ -75,11 +73,9 @@ class TradingBot:
         self.avax_grid = GridTrader(
             "AVAXUSDT", grid_size_percent=2.0, num_grids=8, base_order_size=50
         )
-        self.render_signals = RenderSignalTrader(rebalance_threshold=0.75)
 
         # Bot state
         self.running = False
-        self.last_render_check = None
         self.portfolio_value = 0.0
         self.daily_trades = 0
         self.last_portfolio_update = None
