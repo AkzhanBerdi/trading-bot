@@ -101,9 +101,9 @@ class TradingBot:
         )
 
     def setup_logging(self):
-        """Setup logging configuration"""
-        # Create logs directory relative to current location
-        log_dir = Path("scripts/data/logs")
+        """Setup logging configuration - FIXED to use centralized data directory"""
+        # Use centralized data/logs directory (absolute path from project root)
+        log_dir = Path("data/logs")
         log_dir.mkdir(parents=True, exist_ok=True)
 
         # Configure logging
