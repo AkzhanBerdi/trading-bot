@@ -130,23 +130,48 @@ class GridTrader:
             return False
     
     def get_grid_status(self) -> Dict:
-        """Get current grid trading status"""
-        buy_orders_filled = len([o for o in self.filled_orders if o['side'] == 'BUY'])
-        sell_orders_filled = len([o for o in self.filled_orders if o['side'] == 'SELL'])
-        
-        total_volume = sum([o['quantity'] * o['price'] for o in self.filled_orders])
-        
-        return {
-            'symbol': self.symbol,
-            'buy_orders_filled': buy_orders_filled,
-            'sell_orders_filled': sell_orders_filled,
-            'total_orders': len(self.filled_orders),
-            'total_volume_usdt': total_volume,
-            'grid_levels': {
-                'buy_levels': len(self.buy_levels),
-                'sell_levels': len(self.sell_levels)
+        """Get current grid trading status with error handling"""
+        try:
+            buy_orders_filled = len([o for o in self.filled_orders if o.get('side') == 'BUY'])
+            sell_orders_filled = len([o for o in self.filled_orders if o.get('side') == 'SELL'])
+            
+            total_volume = 0
+            for order in self.filled_orders:
+                try:
+                    if 'total_value' in order:
+                        total_volume += order['total_value']
+                    else:
+                        # Calculate from quantity and price
+                        qty = order.get('quantity', 0)
+                        price = order.get('price', 0)
+                        total_volume += qty * price
+                except:
+                    continue
+            
+            return {
+                'symbol': self.symbol,
+                'buy_orders_filled': buy_orders_filled,
+                'sell_orders_filled': sell_orders_filled,
+                'total_orders': len(self.filled_orders),
+                'total_volume_usdt': total_volume,
+                'grid_levels': {
+                    'buy_levels': len(getattr(self, 'buy_levels', [])),
+                    'sell_levels': len(getattr(self, 'sell_levels', []))
+                }
             }
-        }
+        except Exception as e:
+            # Return safe defaults on error
+            return {
+                'symbol': getattr(self, 'symbol', 'UNKNOWN'),
+                'buy_orders_filled': 0,
+                'sell_orders_filled': 0,
+                'total_orders': 0,
+                'total_volume_usdt': 0,
+                'grid_levels': {
+                    'buy_levels': 0,
+                    'sell_levels': 0
+                }
+            }
     
     def calculate_grid_profit(self) -> float:
         """Calculate profit from completed grid cycles"""
