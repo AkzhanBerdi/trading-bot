@@ -53,7 +53,10 @@ class TradingBotConfig:
     def __post_init__(self):
         """Initialize default configurations"""
         if self.grid_trading_assets is None:
-            self.grid_trading_assets = ["SOL", "AVAX"]  # Focus on just grid trading
+            self.grid_trading_assets = [
+                "ADA",
+                "AVAX",
+            ]  # Match what you're actually trading
 
         if self.grid_config is None:
             self.grid_config = GridTradingConfig()
@@ -65,24 +68,24 @@ class TradingBotConfig:
 # Global configuration instance
 config = TradingBotConfig()
 
-# Simplified asset configurations - just the essentials
+# Simplified asset configurations - match your actual trading pairs
 ASSET_CONFIGS = {
-    "SOL": {
-        "grid_size_percent": 2.0,
+    "ADA": {
+        "grid_size_percent": 2.5,  # 2.5% spacing for ADA
         "num_grids": 8,
         "base_order_size": 50.0,
-        "symbol": "SOLUSDT",
+        "symbol": "ADAUSDT",
     },
     "AVAX": {
-        "grid_size_percent": 2.5,
+        "grid_size_percent": 2.0,  # 2.0% spacing for AVAX
         "num_grids": 8,
         "base_order_size": 50.0,
         "symbol": "AVAXUSDT",
     },
 }
 
-# Trading pairs configuration - simplified
-TRADING_PAIRS = {"SOL": "SOLUSDT", "AVAX": "AVAXUSDT"}
+# Trading pairs configuration - match your test results
+TRADING_PAIRS = {"ADA": "ADAUSDT", "AVAX": "AVAXUSDT"}
 
 # Binance API configuration
 BINANCE_CONFIG = {
