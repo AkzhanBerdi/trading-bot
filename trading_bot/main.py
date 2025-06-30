@@ -9,7 +9,6 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 from utils.enhanced_trade_logger import EnhancedTradeLogger
-from utils.grid_persistence import GridStatePersistence
 from utils.telegram_commands import TelegramBotCommands
 
 
@@ -46,7 +45,7 @@ from strategies.grid_trading import GridTrader
 from utils.binance_client import BinanceManager
 
 # Import telegram notifier after env is loaded
-from utils.telegram_notifier import telegram_notifier
+from utils.telegram_notifier import NotificationType, telegram_notifier
 
 
 class TradingBot:
@@ -91,14 +90,14 @@ class TradingBot:
         # Enhanced logging
         self.trade_logger = EnhancedTradeLogger()
 
-        # Grid persistence
-        self.ada_grid_persistence = GridStatePersistence("ADAUSDT")
-        self.avax_grid_persistence = GridStatePersistence("AVAXUSDT")
-
         # Telegram commands
         self.telegram_commands = TelegramBotCommands(
             self, telegram_notifier, self.trade_logger
         )
+
+        # Smart trading configuration
+        self.sell_loss_tolerance = 0.01  # 1% max loss on sells
+        self.buy_premium_tolerance = 0.02  # 2% max premium on buys
 
     def setup_logging(self):
         """Setup logging configuration - FIXED to use centralized data directory"""
@@ -126,9 +125,9 @@ class TradingBot:
         root_logger.addHandler(console_handler)
 
     async def initialize_grids(self):
-        """Initialize trading grids with state restoration for both ADA and AVAX"""
+        """Initialize fresh trading grids - SIMPLIFIED VERSION"""
         try:
-            self.logger.info("🔄 Initializing trading grids with state restoration...")
+            self.logger.info("🔄 Initializing fresh trading grids...")
 
             # Get current prices
             ada_price = self.binance.get_price("ADAUSDT")
@@ -142,70 +141,20 @@ class TradingBot:
                 f"💰 Current prices: ADA=${ada_price:.4f}, AVAX=${avax_price:.4f}"
             )
 
-            # Restore ADA grid state
-            ada_state = self.ada_grid_persistence.load_grid_state(ada_price)
-            if ada_state:
-                self.ada_grid.filled_orders = ada_state["filled_orders"]
-                self.ada_grid.buy_levels = ada_state["buy_levels"]
-                self.ada_grid.sell_levels = ada_state["sell_levels"]
-                self.logger.info(
-                    f"🔄 ADA grid restored: {len(ada_state['filled_orders'])} filled orders"
-                )
+            # Always create fresh grids - no state restoration
+            self.ada_grid.setup_grid(ada_price)
+            self.avax_grid.setup_grid(avax_price)
 
-                # Log details of restored orders
-                buy_orders = len(
-                    [o for o in ada_state["filled_orders"] if o.get("side") == "BUY"]
-                )
-                sell_orders = len(
-                    [o for o in ada_state["filled_orders"] if o.get("side") == "SELL"]
-                )
-                self.logger.info(
-                    f"   📈 ADA: {buy_orders} BUY, {sell_orders} SELL orders restored"
-                )
-            else:
-                # Setup new ADA grid
-                self.ada_grid.setup_grid(ada_price)
-                self.logger.info("🆕 ADA: Created new grid")
-
-            # Restore AVAX grid state
-            avax_state = self.avax_grid_persistence.load_grid_state(avax_price)
-            if avax_state:
-                self.avax_grid.filled_orders = avax_state["filled_orders"]
-                self.avax_grid.buy_levels = avax_state["buy_levels"]
-                self.avax_grid.sell_levels = avax_state["sell_levels"]
-                self.logger.info(
-                    f"🔄 AVAX grid restored: {len(avax_state['filled_orders'])} filled orders"
-                )
-
-                # Log details of restored orders
-                buy_orders = len(
-                    [o for o in avax_state["filled_orders"] if o.get("side") == "BUY"]
-                )
-                sell_orders = len(
-                    [o for o in avax_state["filled_orders"] if o.get("side") == "SELL"]
-                )
-                self.logger.info(
-                    f"   📈 AVAX: {buy_orders} BUY, {sell_orders} SELL orders restored"
-                )
-            else:
-                # Setup new AVAX grid
-                self.avax_grid.setup_grid(avax_price)
-                self.logger.info("🆕 AVAX: Created new grid")
-
+            self.logger.info("✅ Fresh grids created")
             self.grid_initialized = True
 
-            # Send notification about grid restoration
+            # Send notification about fresh grids
             if telegram_notifier.enabled:
-                ada_status = "RESTORED" if ada_state else "NEW"
-                avax_status = "RESTORED" if avax_state else "NEW"
-                ada_orders = len(ada_state["filled_orders"]) if ada_state else 0
-                avax_orders = len(avax_state["filled_orders"]) if avax_state else 0
-
                 await telegram_notifier.notify_info(
-                    "🎯 Grid Initialization Complete\n"
-                    f"ADA: {ada_status} ({ada_orders} orders)\n"
-                    f"AVAX: {avax_status} ({avax_orders} orders)\n"
-                    f"Ready for trading! 🚀",
+                    "🎯 Fresh Grids Initialized\n"
+                    f"ADA: 16 levels around ${ada_price:.4f}\n"
+                    f"AVAX: 16 levels around ${avax_price:.4f}\n"
+                    f"Clean slate - ready for trading! 🚀"
                 )
 
             return True
@@ -219,7 +168,7 @@ class TradingBot:
             return False
 
     async def get_portfolio_status(self):
-        """Get current portfolio status"""
+        """Get current portfolio status - ONLY FOR TELEGRAM COMMANDS"""
         try:
             balances = self.binance.get_account_balance()
             portfolio = {}
@@ -253,96 +202,108 @@ class TradingBot:
             return {}, 0.0
 
     async def check_grid_strategies(self):
-        """Check and execute grid trading strategies with detailed logging and notifications"""
+        """Smart grid strategies with profit protection"""
+
+        # ADA Grid with smart execution
         try:
-            # Check ADA grid
             ada_price = self.binance.get_price("ADAUSDT")
             if ada_price:
                 self.logger.info(f"🔸 ADA Current Price: ${ada_price:.4f}")
-
-                # Log grid levels and distances
-                self._log_grid_details("ADA", self.ada_grid, ada_price)
-
                 ada_signals = self.ada_grid.check_signals(ada_price)
-                if ada_signals:
-                    self.logger.info(f"⚡ ADA: {len(ada_signals)} signals detected!")
-                    for signal in ada_signals:
-                        self.logger.info(
-                            f"   📍 Signal: {signal['action']} level {signal['level']} "
-                            f"at ${signal['price']:.4f} (strength: {signal['signal_strength']:.2f})"
-                        )
 
-                        if signal["signal_strength"] >= 0.7:
-                            # Send trade attempt notification
-                            await telegram_notifier.notify_trade_attempt(
-                                symbol="ADAUSDT",
-                                action=signal["action"],
-                                price=signal["price"],
-                                quantity=signal["quantity"],
-                                level=signal["level"],
-                            )
+                for signal in ada_signals:
+                    success = await self.execute_smart_grid_order(self.ada_grid, signal)
+                    if success:
+                        break  # One trade per cycle
 
-                            success = await self.execute_grid_order_with_notifications(
-                                self.ada_grid, signal, "ADA"
-                            )
+        except Exception as e:
+            self.logger.error(f"❌ ADA grid error: {e}")
 
-                            if success:
-                                self.daily_trades += 1
-                                self.logger.info(
-                                    f"✅ ADA grid trade executed: {signal['action']} at ${signal['price']:.4f}"
-                                )
-                else:
-                    self.logger.info("🔹 ADA: No grid signals detected")
-
-            # Check AVAX grid
+        # AVAX Grid with smart execution
+        try:
             avax_price = self.binance.get_price("AVAXUSDT")
             if avax_price:
                 self.logger.info(f"🔸 AVAX Current Price: ${avax_price:.4f}")
-
-                # Log grid levels and distances
-                self._log_grid_details("AVAX", self.avax_grid, avax_price)
-
                 avax_signals = self.avax_grid.check_signals(avax_price)
-                if avax_signals:
-                    self.logger.info(f"⚡ AVAX: {len(avax_signals)} signals detected!")
-                    for signal in avax_signals:
-                        self.logger.info(
-                            f"   📍 Signal: {signal['action']} level {signal['level']} "
-                            f"at ${signal['price']:.4f} (strength: {signal['signal_strength']:.2f})"
-                        )
 
-                        if signal["signal_strength"] >= 0.7:
-                            # Send trade attempt notification
-                            await telegram_notifier.notify_trade_attempt(
-                                symbol="AVAXUSDT",
-                                action=signal["action"],
-                                price=signal["price"],
-                                quantity=signal["quantity"],
-                                level=signal["level"],
-                            )
-
-                            success = await self.execute_grid_order_with_notifications(
-                                self.avax_grid, signal, "AVAX"
-                            )
-
-                            if success:
-                                self.daily_trades += 1
-                                self.logger.info(
-                                    f"✅ AVAX grid trade executed: {signal['action']} at ${signal['price']:.4f}"
-                                )
-                else:
-                    self.logger.info("🔹 AVAX: No grid signals detected")
+                for signal in avax_signals:
+                    success = await self.execute_smart_grid_order(
+                        self.avax_grid, signal
+                    )
+                    if success:
+                        break  # One trade per cycle
 
         except Exception as e:
-            self.logger.error(f"Error in grid strategies: {e}")
-            await telegram_notifier.notify_trade_error(
-                symbol="GRID_SYSTEM", action="CHECK_STRATEGIES", error_message=str(e)
-            )
+            self.logger.error(f"❌ AVAX grid error: {e}")
 
-    async def execute_grid_order_with_notifications(
-        self, grid_trader, signal, asset_name
-    ):
-        """Enhanced grid order execution with comprehensive error handling and logging"""
+    async def execute_smart_grid_order(self, grid_trader, signal):
+        """Smart execution: Allow profitable sells, block unprofitable ones"""
+
+        symbol = grid_trader.symbol
+        action = signal["action"]
+        grid_price = signal["price"]
+        current_price = self.binance.get_price(symbol)
+
+        if not current_price:
+            self.logger.error(f"❌ Cannot get current price for {symbol}")
+            return False
+
+        price_diff_percent = (current_price - grid_price) / grid_price
+
+        # SELL LOGIC: Profit protection
+        if action == "SELL":
+            tolerance = 1 - self.sell_loss_tolerance  # 0.99 for 1% tolerance
+            if current_price >= grid_price * tolerance:
+                profit_percent = price_diff_percent * 100
+                self.logger.info(
+                    f"✅ {symbol} PROFITABLE SELL: Grid ${grid_price:.4f} → "
+                    f"Market ${current_price:.4f} ({profit_percent:+.2f}%)"
+                )
+            else:
+                loss_percent = abs(price_diff_percent) * 100
+                self.logger.warning(
+                    f"🚫 {symbol} UNPROFITABLE SELL BLOCKED: Grid ${grid_price:.4f} → "
+                    f"Market ${current_price:.4f} (-{loss_percent:.2f}% loss)"
+                )
+
+                await telegram_notifier.send_notification(
+                    NotificationType.WARNING,
+                    "Unprofitable Sell Blocked",
+                    f"🚫 {symbol} SELL blocked\n"
+                    f"Would lose {loss_percent:.1f}%\n"
+                    f"Waiting for better price...",
+                )
+                return False
+
+        # BUY LOGIC: Allow reasonable premiums
+        elif action == "BUY":
+            tolerance = 1 + self.buy_premium_tolerance  # 1.02 for 2% tolerance
+            if current_price <= grid_price * tolerance:
+                if current_price <= grid_price:
+                    discount_percent = abs(price_diff_percent) * 100
+                    self.logger.info(
+                        f"✅ {symbol} DISCOUNT BUY: Grid ${grid_price:.4f} → "
+                        f"Market ${current_price:.4f} (-{discount_percent:.2f}% discount)"
+                    )
+                else:
+                    premium_percent = price_diff_percent * 100
+                    self.logger.info(
+                        f"✅ {symbol} ACCEPTABLE BUY: Grid ${grid_price:.4f} → "
+                        f"Market ${current_price:.4f} (+{premium_percent:.2f}% premium)"
+                    )
+            else:
+                premium_percent = price_diff_percent * 100
+                self.logger.warning(
+                    f"🚫 {symbol} EXPENSIVE BUY BLOCKED: Grid ${grid_price:.4f} → "
+                    f"Market ${current_price:.4f} (+{premium_percent:.2f}% premium)"
+                )
+                return False
+
+        # Execute if we reach here
+        return await self.execute_grid_order_with_notifications(grid_trader, signal)
+
+    async def execute_grid_order_with_notifications(self, grid_trader, signal):
+        """Enhanced grid order execution - SIMPLIFIED VERSION"""
         start_time = time.time()
 
         try:
@@ -362,7 +323,7 @@ class TradingBot:
                 self.binance._sync_time_offset()
                 self.logger.info("🔄 Refreshed timestamp sync before trade")
 
-            # 2. Precision fix (your existing logic)
+            # 2. Precision fix
             if action == "BUY":
                 if symbol == "ADAUSDT":
                     quantity = round(quantity, 0)  # Whole numbers for ADA
@@ -390,7 +351,7 @@ class TradingBot:
                     )
                     return False
 
-            # 4. Balance check
+            # 4. Balance check - CRITICAL for trading
             try:
                 balances = self.binance.get_account_balance()
 
@@ -418,9 +379,7 @@ class TradingBot:
                     )
 
                     if asset_balance < quantity:
-                        error_msg = (
-                            f"Insufficient {base_asset}: {asset_balance} < {quantity}"
-                        )
+                        error_msg = f"Insufficient {base_asset}: {asset_balance:.8f} < {quantity:.8f}"
                         self.logger.error(f"❌ {error_msg}")
                         await telegram_notifier.notify_trade_error(
                             symbol=symbol,
@@ -513,7 +472,7 @@ class TradingBot:
                         buy_price = recent_buy.get("price", avg_price * 0.975)
                         profit = (avg_price - buy_price) * filled_quantity
 
-                # Record filled order with enhanced details
+                # Record filled order with enhanced details (in-memory only)
                 filled_order = {
                     "symbol": symbol,
                     "side": action,
@@ -529,9 +488,10 @@ class TradingBot:
                     "execution_time_ms": execution_time_ms,
                 }
 
+                # ✅ SIMPLIFIED: Just track in memory (no file persistence)
                 grid_trader.filled_orders.append(filled_order)
 
-                # Log trade to database
+                # Log trade to database (this is still useful)
                 trade_id = self.trade_logger.log_trade_execution(
                     symbol=symbol,
                     side=action,
@@ -542,16 +502,6 @@ class TradingBot:
                     execution_time_ms=execution_time_ms,
                     session_id=self.session_id,
                 )
-
-                # Save grid state after successful trade
-                if symbol == "ADAUSDT":
-                    self.ada_grid_persistence.save_grid_state(
-                        grid_trader, self.session_id
-                    )
-                elif symbol == "AVAXUSDT":
-                    self.avax_grid_persistence.save_grid_state(
-                        grid_trader, self.session_id
-                    )
 
                 # Send success notification
                 await telegram_notifier.notify_trade_success(
@@ -625,70 +575,8 @@ class TradingBot:
             self.consecutive_failures += 1
             return False
 
-    def _log_grid_details(self, asset_name: str, grid_trader, current_price: float):
-        """Log detailed grid information to understand why trades aren't happening"""
-
-        # Get filled order levels to show which are already used
-        filled_buy_levels = [
-            o["level"] for o in grid_trader.filled_orders if o["side"] == "BUY"
-        ]
-        filled_sell_levels = [
-            o["level"] for o in grid_trader.filled_orders if o["side"] == "SELL"
-        ]
-
-        # Find nearest buy and sell levels
-        nearest_buy_price = None
-        nearest_buy_distance = float("inf")
-        nearest_sell_price = None
-        nearest_sell_distance = float("inf")
-
-        # Check buy levels (below current price)
-        for level in grid_trader.buy_levels:
-            distance = current_price - level["price"]
-            if (
-                distance < nearest_buy_distance
-                and level["level"] not in filled_buy_levels
-            ):
-                nearest_buy_distance = distance
-                nearest_buy_price = level["price"]
-
-        # Check sell levels (above current price)
-        for level in grid_trader.sell_levels:
-            distance = level["price"] - current_price
-            if (
-                distance < nearest_sell_distance
-                and level["level"] not in filled_sell_levels
-            ):
-                nearest_sell_distance = distance
-                nearest_sell_price = level["price"]
-
-        # Log summary of nearest levels
-        if nearest_buy_price:
-            self.logger.info(
-                f"   🎯 {asset_name} Nearest BUY: ${nearest_buy_price:.4f} "
-                f"(${nearest_buy_distance:.4f} below current)"
-            )
-
-        if nearest_sell_price:
-            self.logger.info(
-                f"   🎯 {asset_name} Nearest SELL: ${nearest_sell_price:.4f} "
-                f"(${nearest_sell_distance:.4f} above current)"
-            )
-
-        # Log grid statistics
-        total_buy_levels = len(grid_trader.buy_levels)
-        total_sell_levels = len(grid_trader.sell_levels)
-        filled_buys = len(filled_buy_levels)
-        filled_sells = len(filled_sell_levels)
-
-        self.logger.info(
-            f"   📊 {asset_name} Grid Status: "
-            f"BUY {filled_buys}/{total_buy_levels} filled, "
-            f"SELL {filled_sells}/{total_sell_levels} filled"
-        )
-
     async def send_portfolio_update(self):
-        """Send periodic portfolio update"""
+        """Send periodic portfolio update - ONLY CALLED VIA TELEGRAM"""
         try:
             portfolio, total_value = await self.get_portfolio_status()
 
@@ -719,7 +607,7 @@ class TradingBot:
             self.logger.error(f"Error sending portfolio update: {e}")
 
     async def run_cycle(self):
-        """Simplified run cycle - FIXED VERSION"""
+        """Optimized run cycle - PORTFOLIO MONITORING REMOVED"""
         try:
             # Initialize grids on first cycle
             if not self.grid_initialized:
@@ -727,40 +615,10 @@ class TradingBot:
                 if not success:
                     return False
 
-            # Get portfolio status with error handling
-            try:
-                portfolio, total_value = await self.get_portfolio_status()
-                if total_value > 0:
-                    self.logger.info(f"💰 Portfolio value: ${total_value:.2f}")
-            except Exception as e:
-                # Check if it's a network error
-                if any(
-                    keyword in str(e).lower()
-                    for keyword in ["timeout", "connection", "network"]
-                ):
-                    self.logger.warning(f"⚠️ Network issue getting portfolio: {e}")
-                    # Try network recovery only if Binance fails
-                    if not await self.handle_network_failure():
-                        return False
-                else:
-                    self.logger.error(f"❌ Portfolio error: {e}")
-                    return False
+            # ✅ CRITICAL TRADING LOGIC ONLY
+            await self.check_grid_strategies()
 
-            # Execute grid strategies with error handling
-            try:
-                await self.check_grid_strategies()
-            except Exception as e:
-                if any(
-                    keyword in str(e).lower()
-                    for keyword in ["timeout", "connection", "network"]
-                ):
-                    self.logger.warning(f"⚠️ Network issue in grid strategies: {e}")
-                    if not await self.handle_network_failure():
-                        return False
-                else:
-                    raise e
-
-            # Log grid status with error handling
+            # ✅ GRID STATUS LOGGING (doesn't hit API)
             try:
                 ada_status = self.ada_grid.get_grid_status()
                 avax_status = self.avax_grid.get_grid_status()
@@ -779,32 +637,24 @@ class TradingBot:
             return True
 
         except Exception as e:
-            self.logger.error(f"Error in trading cycle: {e}")
-
-            # Only check network if it's clearly a network error
-            if any(
-                keyword in str(e).lower()
-                for keyword in ["timeout", "connection", "network", "resolve"]
-            ):
-                self.logger.warning("🌐 Potential network-related error detected")
-                await self.handle_network_failure()
-
+            self.logger.error(f"❌ Critical error in run_cycle: {e}")
+            self.consecutive_failures += 1
             return False
 
     async def run(self):
         """Enhanced main bot loop with proper start/stop functionality"""
-        self.logger.info("🚀 Starting enhanced trading bot...")
+        self.logger.info("🚀 Starting simplified trading bot...")
 
         # Log bot start
         self.trade_logger.log_bot_event(
             "START",
-            "Enhanced trading bot started",
+            "Simplified trading bot started",
             "SYSTEM",
             "INFO",
             {
                 "session_id": self.session_id,
                 "start_time": datetime.now().isoformat(),
-                "version": "enhanced_v2.0",
+                "version": "simplified_v1.0",
             },
             self.session_id,
         )
@@ -815,17 +665,18 @@ class TradingBot:
         )
         self.logger.info("🤖 Telegram command processor started")
 
-        # Send safer startup notification
+        # Send startup notification
         if telegram_notifier.enabled:
             try:
                 await telegram_notifier.notify_bot_status(
                     "started",
-                    "🤖 Enhanced Trading Bot Online!\n"
-                    "ADA Grid: 2.5% spacing\n"
-                    "AVAX Grid: 2.0% spacing\n"
-                    "Database: SQLite logging enabled\n"
+                    "🤖 Simplified Trading Bot Online!\n"
+                    "✅ Grid persistence removed - more reliable\n"
+                    "✅ Fresh grids every restart - no state corruption\n"
+                    "✅ Smart execution: Profit protection enabled\n"
+                    "✅ Portfolio monitoring: Removed (fixes -2015 errors)\n"
                     "Commands: /start for help\n"
-                    "Use /resume to start trading!",  # ← ADD THIS LINE
+                    "Use /resume to start trading!",
                 )
             except Exception as e:
                 self.logger.warning(f"Startup notification failed: {e}")
@@ -838,7 +689,6 @@ class TradingBot:
         self.running = True  # Start in running state
         bot_alive = True  # Controls whether bot stays alive
         cycle_count = 0
-        last_portfolio_update = 0
         last_health_check = 0
 
         try:
@@ -904,15 +754,6 @@ class TradingBot:
                         self.running = False
                         continue
 
-                    # Portfolio update
-                    current_time = time.time()
-                    if (cycle_count % 2880 == 0) and telegram_notifier.enabled:
-                        try:
-                            await self.send_portfolio_update()
-                            last_portfolio_update = current_time
-                        except Exception as e:
-                            self.logger.warning(f"⚠️ Portfolio update failed: {e}")
-
                     # Log cycle performance
                     cycle_time = time.time() - cycle_start_time
                     if cycle_time > 10:
@@ -926,7 +767,7 @@ class TradingBot:
                 else:
                     # PAUSED SECTION - Trading stopped via /stop command
                     self.logger.debug(
-                        "💤 Trading paused, waiting for /start_bot command..."
+                        "💤 Trading paused, waiting for /resume command..."
                     )
 
                     # Check if restart was requested via Telegram
@@ -984,7 +825,7 @@ class TradingBot:
             # Log bot stop
             self.trade_logger.log_bot_event(
                 "STOP",
-                "Enhanced trading bot stopped",
+                "Simplified trading bot stopped",
                 "SYSTEM",
                 "INFO",
                 {
@@ -997,12 +838,12 @@ class TradingBot:
             if telegram_notifier.enabled:
                 await telegram_notifier.notify_bot_status(
                     "stopped",
-                    f"Enhanced Trading Bot Stopped\n"
+                    f"Simplified Trading Bot Stopped\n"
                     f"Total cycles: {cycle_count}\n"
                     f"Session time: {time.time() - self.start_time:.0f}s",
                 )
 
-            self.logger.info("🛑 Enhanced trading bot stopped")
+            self.logger.info("🛑 Simplified trading bot stopped")
 
     async def _test_connection_with_retries(self):
         """Test connection with retries"""
@@ -1039,28 +880,6 @@ class TradingBot:
                 self.logger.warning("⚠️ API health check failed")
         except Exception as e:
             self.logger.warning(f"⚠️ API health check failed: {e}")
-
-    def _calculate_average_price(self, order):
-        """Calculate average fill price from order"""
-        try:
-            fills = order.get("fills", [])
-            if not fills:
-                return float(order.get("price", 0))
-
-            total_qty = 0
-            total_value = 0
-
-            for fill in fills:
-                qty = float(fill["qty"])
-                price = float(fill["price"])
-                total_qty += qty
-                total_value += qty * price
-
-            return total_value / total_qty if total_qty > 0 else 0
-
-        except Exception as e:
-            self.logger.error(f"Error calculating average price: {e}")
-            return float(order.get("price", 0))
 
     async def check_api_health(self):
         """Quick API health check"""

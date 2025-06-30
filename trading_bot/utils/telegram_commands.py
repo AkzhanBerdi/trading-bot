@@ -647,64 +647,31 @@ Uptime: {uptime}
             )
 
     async def cmd_reset(self, message):
-        """Handle /reset command with proper confirmation"""
+        """Reset grids - SIMPLIFIED VERSION"""
         try:
-            text = message["text"].strip()
+            # Get current prices
+            ada_price = self.trading_bot.binance.get_price("ADAUSDT")
+            avax_price = self.trading_bot.binance.get_price("AVAXUSDT")
 
-            if text == "/reset confirm":
-                # Actually perform the reset
-                try:
-                    # Clear ADA grid state
-                    if hasattr(self.trading_bot, "ada_grid_persistence"):
-                        self.trading_bot.ada_grid_persistence.clear_state()
-                        self.trading_bot.ada_grid.filled_orders = []
+            if ada_price and avax_price:
+                # Reset grids with current prices
+                self.trading_bot.ada_grid.setup_grid(ada_price)
+                self.trading_bot.avax_grid.setup_grid(avax_price)
 
-                    # Clear AVAX grid state
-                    if hasattr(self.trading_bot, "avax_grid_persistence"):
-                        self.trading_bot.avax_grid_persistence.clear_state()
-                        self.trading_bot.avax_grid.filled_orders = []
-
-                    # Reset grid initialization flag
-                    self.trading_bot.grid_initialized = False
-
-                    # Log the reset
-                    self.trade_logger.log_bot_event(
-                        "GRID_RESET",
-                        "Grid state reset via Telegram command",
-                        "TELEGRAM",
-                        "INFO",
-                    )
-
-                    await self.send_reply(
-                        message,
-                        "✅ *Grid state reset complete!*\n\n"
-                        "• All filled orders cleared\n"
-                        "• Grid levels reset\n"
-                        "• Fresh grids will be created on next cycle\n\n"
-                        "Trading continues with clean state.",
-                    )
-
-                except Exception as e:
-                    await self.send_reply(
-                        message, f"❌ Error during reset: {str(e)[:100]}"
-                    )
-
+                await self.send_reply(
+                    message,
+                    f"🔄 *Grids Reset*\n\n"
+                    f"ADA: Fresh grid at ${ada_price:.4f}\n"
+                    f"AVAX: Fresh grid at ${avax_price:.4f}\n"
+                    f"All levels cleared and recreated",
+                )
             else:
-                # Show confirmation message
-                reply = "⚠️ *Grid State Reset*\n\n"
-                reply += "This will clear all saved grid states and restart with fresh grids.\n\n"
-                reply += "**WARNING:** This will:\n"
-                reply += "• Clear all filled order history\n"
-                reply += "• Reset grid levels\n"
-                reply += "• Lose current position tracking\n\n"
-                reply += (
-                    "Send `/reset confirm` to proceed or any other message to cancel."
+                await self.send_reply(
+                    message, "❌ Could not get current prices for reset"
                 )
 
-                await self.send_reply(message, reply)
-
         except Exception as e:
-            await self.send_reply(message, f"❌ Error in reset: {str(e)[:100]}")
+            await self.send_reply(message, f"❌ Error resetting grids: {str(e)[:100]}")
 
     async def cmd_recent_errors(self, message):
         """Handle /errors command - Show recent errors"""
