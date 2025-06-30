@@ -6,23 +6,19 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-import requests
 from dotenv import load_dotenv
-from utils.enhanced_trade_logger import EnhancedTradeLogger
+from utils.database_logger import DatabaseLogger
 from utils.telegram_commands import TelegramBotCommands
 
 
-# Find and load .env file from project root
 def find_and_load_env():
     """Find .env file in project root and load it"""
     current_dir = Path(__file__).parent
-
-    # Try different locations for .env file
     env_paths = [
-        current_dir / ".env",  # Current directory
-        current_dir.parent / ".env",  # Parent directory
-        current_dir.parent.parent / ".env",  # Project root
-        current_dir.parent.parent.parent / ".env",  # Just in case
+        current_dir / ".env",
+        current_dir.parent / ".env",
+        current_dir.parent.parent / ".env",
+        current_dir.parent.parent.parent / ".env",
     ]
 
     for env_path in env_paths:
@@ -31,29 +27,23 @@ def find_and_load_env():
             load_dotenv(env_path)
             return True
 
-    print("❌ .env file not found in any expected location:")
-    for path in env_paths:
-        print(f"  Checked: {path.absolute()}")
+    print("❌ .env file not found in any expected location")
     return False
 
 
 # Load environment first
 env_loaded = find_and_load_env()
 
-# Local imports (using relative paths for your directory structure)
+# Local imports
 from strategies.grid_trading import GridTrader
 from utils.binance_client import BinanceManager
-
-# Import telegram notifier after env is loaded
 from utils.telegram_notifier import NotificationType, telegram_notifier
 
 
 class TradingBot:
     def __init__(self):
-        """Initialize the trading bot"""
-        # Don't send notifications during __init__ - no event loop yet!
-
-        # Setup logging
+        """Initialize the simplified trading bot"""
+        # Setup minimal logging (console only)
         self.setup_logging()
         self.logger = logging.getLogger(__name__)
 
@@ -63,9 +53,9 @@ class TradingBot:
             self.logger.info("✅ Binance client initialized")
         except Exception as e:
             self.logger.error(f"❌ Failed to initialize Binance client: {e}")
-            raise  # Don't try to send notifications here
+            raise
 
-        # Initialize strategies with your current parameters
+        # Initialize strategies
         self.ada_grid = GridTrader(
             "ADAUSDT", grid_size_percent=2.5, num_grids=8, base_order_size=50
         )
@@ -75,45 +65,29 @@ class TradingBot:
 
         # Bot state
         self.running = False
-        self.portfolio_value = 0.0
-        self.daily_trades = 0
-        self.last_portfolio_update = None
         self.grid_initialized = False
-
-        self.logger.info("🤖 Trading Bot initialized successfully")
-        # Add these new components:
         self.start_time = time.time()
         self.session_id = f"session_{int(time.time())}_{os.getpid()}"
         self.consecutive_failures = 0
         self.max_consecutive_failures = 5
 
-        # Enhanced logging
-        self.trade_logger = EnhancedTradeLogger()
+        # Database logger (single source of truth)
+        self.db_logger = DatabaseLogger()
 
         # Telegram commands
         self.telegram_commands = TelegramBotCommands(
-            self, telegram_notifier, self.trade_logger
+            self, telegram_notifier, self.db_logger
         )
 
-        # Smart trading configuration
+        # Trading configuration
         self.sell_loss_tolerance = 0.01  # 1% max loss on sells
         self.buy_premium_tolerance = 0.02  # 2% max premium on buys
 
     def setup_logging(self):
-        """Setup logging configuration - FIXED to use centralized data directory"""
-        # Use centralized data/logs directory (absolute path from project root)
-        log_dir = Path("data/logs")
-        log_dir.mkdir(parents=True, exist_ok=True)
-
-        # Configure logging
+        """Setup minimal console-only logging"""
         log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
-        # File handler
-        file_handler = logging.FileHandler(log_dir / "trading_bot.log")
-        file_handler.setLevel(logging.INFO)
-        file_handler.setFormatter(logging.Formatter(log_format))
-
-        # Console handler
+        # Console handler only
         console_handler = logging.StreamHandler()
         console_handler.setLevel(logging.INFO)
         console_handler.setFormatter(logging.Formatter(log_format))
@@ -121,11 +95,14 @@ class TradingBot:
         # Configure root logger
         root_logger = logging.getLogger()
         root_logger.setLevel(logging.INFO)
-        root_logger.addHandler(file_handler)
+        root_logger.handlers.clear()
         root_logger.addHandler(console_handler)
 
+        self.logger = logging.getLogger(__name__)
+        self.logger.info("✅ Simplified console-only logging setup")
+
     async def initialize_grids(self):
-        """Initialize fresh trading grids - SIMPLIFIED VERSION"""
+        """Initialize fresh trading grids"""
         try:
             self.logger.info("🔄 Initializing fresh trading grids...")
 
@@ -141,26 +118,48 @@ class TradingBot:
                 f"💰 Current prices: ADA=${ada_price:.4f}, AVAX=${avax_price:.4f}"
             )
 
-            # Always create fresh grids - no state restoration
+            # Create fresh grids
             self.ada_grid.setup_grid(ada_price)
             self.avax_grid.setup_grid(avax_price)
 
-            self.logger.info("✅ Fresh grids created")
-            self.grid_initialized = True
+            # Log grid initialization to database
+            self.db_logger.log_bot_event(
+                "GRID_INIT",
+                f"Fresh grids initialized - ADA: ${ada_price:.4f}, AVAX: ${avax_price:.4f}",
+                "SYSTEM",
+                "INFO",
+                {
+                    "ada_price": ada_price,
+                    "avax_price": avax_price,
+                    "ada_levels": self.ada_grid.num_grids * 2,
+                    "avax_levels": self.avax_grid.num_grids * 2,
+                },
+                self.session_id,
+            )
 
-            # Send notification about fresh grids
+            self.grid_initialized = True
+            self.logger.info("✅ Fresh grids created")
+
             if telegram_notifier.enabled:
                 await telegram_notifier.notify_info(
                     "🎯 Fresh Grids Initialized\n"
-                    f"ADA: 16 levels around ${ada_price:.4f}\n"
-                    f"AVAX: 16 levels around ${avax_price:.4f}\n"
-                    f"Clean slate - ready for trading! 🚀"
+                    f"ADA: {self.ada_grid.num_grids * 2} levels around ${ada_price:.4f}\n"
+                    f"AVAX: {self.avax_grid.num_grids * 2} levels around ${avax_price:.4f}\n"
+                    f"Database logging active! 🚀"
                 )
 
             return True
 
         except Exception as e:
             self.logger.error(f"❌ Grid initialization failed: {e}")
+            self.db_logger.log_bot_event(
+                "GRID_INIT_ERROR",
+                f"Grid initialization failed: {e}",
+                "SYSTEM",
+                "ERROR",
+                {"error": str(e)},
+                self.session_id,
+            )
             if telegram_notifier.enabled:
                 await telegram_notifier.notify_bot_status(
                     "error", f"Grid initialization failed: {e}"
@@ -168,7 +167,7 @@ class TradingBot:
             return False
 
     async def get_portfolio_status(self):
-        """Get current portfolio status - ONLY FOR TELEGRAM COMMANDS"""
+        """Get current portfolio status and save to database"""
         try:
             balances = self.binance.get_account_balance()
             portfolio = {}
@@ -177,8 +176,7 @@ class TradingBot:
             for balance in balances:
                 asset = balance["asset"]
                 if balance["total"] > 0:
-                    # Get USD value
-                    if asset == "USDT" or asset == "USDC":
+                    if asset in ["USDT", "USDC"]:
                         usd_value = balance["total"]
                     else:
                         try:
@@ -193,18 +191,31 @@ class TradingBot:
                     }
                     total_value += usd_value
 
-            self.portfolio_value = total_value
+            # Save portfolio snapshot to database
+            self.db_logger.log_portfolio_snapshot(
+                total_value=total_value,
+                assets=portfolio,
+                session_id=self.session_id,
+                notes="Automated portfolio snapshot",
+            )
+
             return portfolio, total_value
 
         except Exception as e:
             self.logger.error(f"Error getting portfolio status: {e}")
-            await telegram_notifier.notify_warning(f"Portfolio status error: {e}")
+            self.db_logger.log_bot_event(
+                "PORTFOLIO_ERROR",
+                f"Portfolio status error: {e}",
+                "SYSTEM",
+                "ERROR",
+                {"error": str(e)},
+                self.session_id,
+            )
             return {}, 0.0
 
     async def check_grid_strategies(self):
-        """Smart grid strategies with profit protection"""
-
-        # ADA Grid with smart execution
+        """Smart grid strategies with database logging"""
+        # ADA Grid
         try:
             ada_price = self.binance.get_price("ADAUSDT")
             if ada_price:
@@ -214,12 +225,20 @@ class TradingBot:
                 for signal in ada_signals:
                     success = await self.execute_smart_grid_order(self.ada_grid, signal)
                     if success:
-                        break  # One trade per cycle
+                        break
 
         except Exception as e:
             self.logger.error(f"❌ ADA grid error: {e}")
+            self.db_logger.log_bot_event(
+                "ADA_GRID_ERROR",
+                f"ADA grid error: {e}",
+                "TRADING",
+                "ERROR",
+                {"error": str(e)},
+                self.session_id,
+            )
 
-        # AVAX Grid with smart execution
+        # AVAX Grid
         try:
             avax_price = self.binance.get_price("AVAXUSDT")
             if avax_price:
@@ -231,14 +250,21 @@ class TradingBot:
                         self.avax_grid, signal
                     )
                     if success:
-                        break  # One trade per cycle
+                        break
 
         except Exception as e:
             self.logger.error(f"❌ AVAX grid error: {e}")
+            self.db_logger.log_bot_event(
+                "AVAX_GRID_ERROR",
+                f"AVAX grid error: {e}",
+                "TRADING",
+                "ERROR",
+                {"error": str(e)},
+                self.session_id,
+            )
 
     async def execute_smart_grid_order(self, grid_trader, signal):
-        """Smart execution: Allow profitable sells, block unprofitable ones"""
-
+        """Smart execution with profit protection and database logging"""
         symbol = grid_trader.symbol
         action = signal["action"]
         grid_price = signal["price"]
@@ -252,7 +278,7 @@ class TradingBot:
 
         # SELL LOGIC: Profit protection
         if action == "SELL":
-            tolerance = 1 - self.sell_loss_tolerance  # 0.99 for 1% tolerance
+            tolerance = 1 - self.sell_loss_tolerance
             if current_price >= grid_price * tolerance:
                 profit_percent = price_diff_percent * 100
                 self.logger.info(
@@ -266,18 +292,33 @@ class TradingBot:
                     f"Market ${current_price:.4f} (-{loss_percent:.2f}% loss)"
                 )
 
-                await telegram_notifier.send_notification(
-                    NotificationType.WARNING,
-                    "Unprofitable Sell Blocked",
-                    f"🚫 {symbol} SELL blocked\n"
-                    f"Would lose {loss_percent:.1f}%\n"
-                    f"Waiting for better price...",
+                # Log blocked trade to database
+                self.db_logger.log_bot_event(
+                    "TRADE_BLOCKED",
+                    f"Unprofitable {symbol} sell blocked - would lose {loss_percent:.1f}%",
+                    "TRADING",
+                    "WARNING",
+                    {
+                        "symbol": symbol,
+                        "action": action,
+                        "grid_price": grid_price,
+                        "current_price": current_price,
+                        "loss_percent": loss_percent,
+                    },
+                    self.session_id,
                 )
+
+                if telegram_notifier.enabled:
+                    await telegram_notifier.send_notification(
+                        NotificationType.WARNING,
+                        "Unprofitable Sell Blocked",
+                        f"🚫 {symbol} SELL blocked\nWould lose {loss_percent:.1f}%\nWaiting for better price...",
+                    )
                 return False
 
         # BUY LOGIC: Allow reasonable premiums
         elif action == "BUY":
-            tolerance = 1 + self.buy_premium_tolerance  # 1.02 for 2% tolerance
+            tolerance = 1 + self.buy_premium_tolerance
             if current_price <= grid_price * tolerance:
                 if current_price <= grid_price:
                     discount_percent = abs(price_diff_percent) * 100
@@ -300,10 +341,10 @@ class TradingBot:
                 return False
 
         # Execute if we reach here
-        return await self.execute_grid_order_with_notifications(grid_trader, signal)
+        return await self.execute_grid_order_with_db_logging(grid_trader, signal)
 
-    async def execute_grid_order_with_notifications(self, grid_trader, signal):
-        """Enhanced grid order execution - SIMPLIFIED VERSION"""
+    async def execute_grid_order_with_db_logging(self, grid_trader, signal):
+        """Execute grid order with comprehensive database logging"""
         start_time = time.time()
 
         try:
@@ -315,33 +356,58 @@ class TradingBot:
                 f"🎯 Executing {action} order: {quantity} {symbol} at level {signal['level']}"
             )
 
-            # 1. Timestamp sync check
-            if (
-                hasattr(self.binance, "last_sync")
-                and time.time() - self.binance.last_sync > 30
-            ):
-                self.binance._sync_time_offset()
-                self.logger.info("🔄 Refreshed timestamp sync before trade")
+            # Log trade attempt to database
+            self.db_logger.log_bot_event(
+                "TRADE_ATTEMPT",
+                f"Attempting {action} {quantity} {symbol} at level {signal['level']}",
+                "TRADING",
+                "INFO",
+                {
+                    "symbol": symbol,
+                    "action": action,
+                    "quantity": quantity,
+                    "grid_level": signal["level"],
+                    "grid_price": signal["price"],
+                },
+                self.session_id,
+            )
 
-            # 2. Precision fix
+            # Precision fix
             if action == "BUY":
                 if symbol == "ADAUSDT":
-                    quantity = round(quantity, 0)  # Whole numbers for ADA
+                    quantity = round(quantity, 0)
                 elif symbol == "AVAXUSDT":
-                    quantity = round(quantity, 2)  # 2 decimals for AVAX
-            else:  # SELL
+                    quantity = round(quantity, 2)
+            else:
                 if symbol == "ADAUSDT":
                     quantity = round(quantity, 0)
                 elif symbol == "AVAXUSDT":
                     quantity = round(quantity, 2)
 
-            # 3. Order size validation
+            # Balance check
             current_price = self.binance.get_price(symbol)
-            if current_price:
-                order_value = quantity * current_price
-                if order_value < 8:  # Safe minimum
-                    error_msg = f"Order value ${order_value:.2f} below minimum ($8)"
-                    self.logger.warning(f"⚠️ {error_msg}")
+            order_value = quantity * current_price
+
+            if order_value < 8:
+                error_msg = f"Order value ${order_value:.2f} below minimum ($8)"
+                self.logger.warning(f"⚠️ {error_msg}")
+
+                # Log error to database
+                self.db_logger.log_bot_event(
+                    "TRADE_ERROR",
+                    error_msg,
+                    "TRADING",
+                    "WARNING",
+                    {
+                        "symbol": symbol,
+                        "action": action,
+                        "order_value": order_value,
+                        "minimum_required": 8,
+                    },
+                    self.session_id,
+                )
+
+                if telegram_notifier.enabled:
                     await telegram_notifier.notify_trade_error(
                         symbol=symbol,
                         action=action,
@@ -349,50 +415,9 @@ class TradingBot:
                         price=signal["price"],
                         quantity=quantity,
                     )
-                    return False
+                return False
 
-            # 4. Balance check - CRITICAL for trading
-            try:
-                balances = self.binance.get_account_balance()
-
-                if action == "BUY":
-                    usdt_balance = next(
-                        (b["free"] for b in balances if b["asset"] == "USDT"), 0
-                    )
-                    required_usdt = quantity * current_price * 1.01  # 1% buffer
-
-                    if usdt_balance < required_usdt:
-                        error_msg = f"Insufficient USDT: {usdt_balance:.2f} < {required_usdt:.2f}"
-                        self.logger.error(f"❌ {error_msg}")
-                        await telegram_notifier.notify_trade_error(
-                            symbol=symbol,
-                            action=action,
-                            error_message=error_msg,
-                            price=signal["price"],
-                            quantity=quantity,
-                        )
-                        return False
-                else:  # SELL
-                    base_asset = symbol.replace("USDT", "")
-                    asset_balance = next(
-                        (b["free"] for b in balances if b["asset"] == base_asset), 0
-                    )
-
-                    if asset_balance < quantity:
-                        error_msg = f"Insufficient {base_asset}: {asset_balance:.8f} < {quantity:.8f}"
-                        self.logger.error(f"❌ {error_msg}")
-                        await telegram_notifier.notify_trade_error(
-                            symbol=symbol,
-                            action=action,
-                            error_message=error_msg,
-                            price=signal["price"],
-                            quantity=quantity,
-                        )
-                        return False
-            except Exception as e:
-                self.logger.warning(f"⚠️ Could not check balance: {e}")
-
-            # 5. Execute order with retry logic
+            # Execute order with retry logic
             order = None
             max_retries = 3
 
@@ -402,30 +427,45 @@ class TradingBot:
                         order = self.binance.place_market_buy(symbol, quantity)
                     else:
                         order = self.binance.place_market_sell(symbol, quantity)
-                    break  # Success, exit retry loop
+                    break
 
                 except Exception as order_error:
                     if attempt < max_retries - 1:
-                        wait_time = (attempt + 1) * 2  # 2, 4, 6 seconds
+                        wait_time = (attempt + 1) * 2
                         self.logger.warning(
                             f"⚠️ Order attempt {attempt + 1} failed: {order_error}"
                         )
-                        self.logger.info(f"   Retrying in {wait_time} seconds...")
                         await asyncio.sleep(wait_time)
                     else:
-                        # Final attempt failed
                         error_msg = f"Order failed after {max_retries} attempts: {str(order_error)}"
-                        await telegram_notifier.notify_trade_error(
-                            symbol=symbol,
-                            action=action,
-                            error_message=error_msg,
-                            price=signal["price"],
-                            quantity=quantity,
+
+                        # Log final failure to database
+                        self.db_logger.log_bot_event(
+                            "TRADE_FAILED",
+                            error_msg,
+                            "TRADING",
+                            "ERROR",
+                            {
+                                "symbol": symbol,
+                                "action": action,
+                                "attempts": max_retries,
+                                "final_error": str(order_error),
+                            },
+                            self.session_id,
                         )
+
+                        if telegram_notifier.enabled:
+                            await telegram_notifier.notify_trade_error(
+                                symbol=symbol,
+                                action=action,
+                                error_message=error_msg,
+                                price=signal["price"],
+                                quantity=quantity,
+                            )
                         self.consecutive_failures += 1
                         return False
 
-            # 6. Process successful order
+            # Process successful order
             if order and order.get("status") == "FILLED":
                 execution_time_ms = int((time.time() - start_time) * 1000)
 
@@ -460,19 +500,29 @@ class TradingBot:
                 # Calculate profit for sell orders
                 profit = None
                 if action == "SELL":
-                    # Try to find matching buy order for profit calculation
                     buy_orders = [
                         o for o in grid_trader.filled_orders if o.get("side") == "BUY"
                     ]
                     if buy_orders:
-                        # Use most recent buy price for simplicity
                         recent_buy = max(
                             buy_orders, key=lambda x: x.get("timestamp", 0)
                         )
                         buy_price = recent_buy.get("price", avg_price * 0.975)
                         profit = (avg_price - buy_price) * filled_quantity
 
-                # Record filled order with enhanced details (in-memory only)
+                # Log successful trade to database
+                trade_id = self.db_logger.log_trade_execution(
+                    symbol=symbol,
+                    side=action,
+                    quantity=filled_quantity,
+                    price=avg_price,
+                    order_result=order,
+                    grid_level=signal["level"],
+                    execution_time_ms=execution_time_ms,
+                    session_id=self.session_id,
+                )
+
+                # Update in-memory grid state
                 filled_order = {
                     "symbol": symbol,
                     "side": action,
@@ -488,126 +538,96 @@ class TradingBot:
                     "execution_time_ms": execution_time_ms,
                 }
 
-                # ✅ SIMPLIFIED: Just track in memory (no file persistence)
                 grid_trader.filled_orders.append(filled_order)
 
-                # Log trade to database (this is still useful)
-                trade_id = self.trade_logger.log_trade_execution(
-                    symbol=symbol,
-                    side=action,
-                    quantity=filled_quantity,
-                    price=avg_price,
-                    order_result=order,
-                    grid_level=signal["level"],
-                    execution_time_ms=execution_time_ms,
-                    session_id=self.session_id,
-                )
-
                 # Send success notification
-                await telegram_notifier.notify_trade_success(
-                    symbol=symbol,
-                    action=action,
-                    price=avg_price,
-                    quantity=filled_quantity,
-                    order_id=str(order_id),
-                    profit=profit,
-                )
+                if telegram_notifier.enabled:
+                    await telegram_notifier.notify_trade_success(
+                        symbol=symbol,
+                        action=action,
+                        price=avg_price,
+                        quantity=filled_quantity,
+                        order_id=str(order_id),
+                        profit=profit,
+                    )
 
                 self.logger.info(
                     f"✅ {action} order filled: {filled_quantity} {symbol} @ ${avg_price:.6f} "
-                    f"(${filled_quantity * avg_price:.2f}) [Level: {signal['level']}] [ID: {trade_id}]"
+                    f"(${filled_quantity * avg_price:.2f}) [Level: {signal['level']}] [DB ID: {trade_id}]"
                 )
 
-                # Reset consecutive failures on success
                 self.consecutive_failures = 0
                 return True
 
             else:
-                # Order failed
                 error_msg = (
                     order.get("msg", "Unknown order error")
                     if order
                     else "Order returned None"
                 )
 
-                await telegram_notifier.notify_trade_error(
-                    symbol=symbol,
-                    action=action,
-                    error_message=error_msg,
-                    price=signal["price"],
-                    quantity=quantity,
+                # Log order failure to database
+                self.db_logger.log_bot_event(
+                    "ORDER_FAILED",
+                    f"Order failed: {error_msg}",
+                    "TRADING",
+                    "ERROR",
+                    {
+                        "symbol": symbol,
+                        "action": action,
+                        "error": error_msg,
+                        "order_status": order.get("status") if order else None,
+                    },
+                    self.session_id,
                 )
+
+                if telegram_notifier.enabled:
+                    await telegram_notifier.notify_trade_error(
+                        symbol=symbol,
+                        action=action,
+                        error_message=error_msg,
+                        price=signal["price"],
+                        quantity=quantity,
+                    )
 
                 self.logger.error(f"❌ Grid order failed: {error_msg}")
                 self.consecutive_failures += 1
                 return False
 
         except Exception as e:
-            # Catch-all exception handler
             execution_time_ms = int((time.time() - start_time) * 1000)
             error_msg = f"Exception in order execution: {str(e)}"
 
-            await telegram_notifier.notify_trade_error(
-                symbol=grid_trader.symbol,
-                action=signal["action"],
-                error_message=error_msg,
-                price=signal["price"],
-                quantity=signal["quantity"],
-            )
-
-            # Log error to database
-            self.trade_logger.log_bot_event(
-                "TRADE_ERROR",
+            # Log critical error to database
+            self.db_logger.log_bot_event(
+                "CRITICAL_TRADE_ERROR",
                 error_msg,
-                "ERROR",
-                "ERROR",
+                "TRADING",
+                "CRITICAL",
                 {
                     "symbol": grid_trader.symbol,
                     "action": signal["action"],
                     "execution_time_ms": execution_time_ms,
+                    "error": str(e),
                 },
                 self.session_id,
             )
 
-            self.logger.error(
-                f"❌ Critical error in execute_grid_order_with_notifications: {e}"
-            )
+            if telegram_notifier.enabled:
+                await telegram_notifier.notify_trade_error(
+                    symbol=grid_trader.symbol,
+                    action=signal["action"],
+                    error_message=error_msg,
+                    price=signal["price"],
+                    quantity=signal["quantity"],
+                )
+
+            self.logger.error(f"❌ Critical error in execute_grid_order: {e}")
             self.consecutive_failures += 1
             return False
 
-    async def send_portfolio_update(self):
-        """Send periodic portfolio update - ONLY CALLED VIA TELEGRAM"""
-        try:
-            portfolio, total_value = await self.get_portfolio_status()
-
-            # Calculate daily change (simplified)
-            daily_change = None
-            if hasattr(self, "previous_portfolio_value"):
-                daily_change = total_value - self.previous_portfolio_value
-            self.previous_portfolio_value = total_value
-
-            # Get top assets
-            top_assets = {}
-            for asset, info in portfolio.items():
-                if info["usd_value"] > 1:  # Only assets worth more than $1
-                    top_assets[asset] = info["usd_value"]
-
-            # Sort by value
-            top_assets = dict(
-                sorted(top_assets.items(), key=lambda x: x[1], reverse=True)
-            )
-
-            await telegram_notifier.notify_portfolio_update(
-                total_value=total_value,
-                daily_change=daily_change,
-                top_assets=top_assets,
-            )
-
-        except Exception as e:
-            self.logger.error(f"Error sending portfolio update: {e}")
-
     async def run_cycle(self):
-        """Optimized run cycle - PORTFOLIO MONITORING REMOVED"""
+        """Simplified run cycle with database logging"""
         try:
             # Initialize grids on first cycle
             if not self.grid_initialized:
@@ -615,46 +635,55 @@ class TradingBot:
                 if not success:
                     return False
 
-            # ✅ CRITICAL TRADING LOGIC ONLY
+            # Core trading logic
             await self.check_grid_strategies()
 
-            # ✅ GRID STATUS LOGGING (doesn't hit API)
-            try:
-                ada_status = self.ada_grid.get_grid_status()
-                avax_status = self.avax_grid.get_grid_status()
-
-                self.logger.info(
-                    f"ADA Grid: {ada_status['total_orders']} orders, "
-                    f"${ada_status['total_volume_usdt']:.2f} volume"
-                )
-                self.logger.info(
-                    f"AVAX Grid: {avax_status['total_orders']} orders, "
-                    f"${avax_status['total_volume_usdt']:.2f} volume"
-                )
-            except Exception as e:
-                self.logger.warning(f"⚠️ Error getting grid status: {e}")
+            # Log cycle completion to database
+            self.db_logger.log_bot_event(
+                "CYCLE_COMPLETE",
+                "Trading cycle completed successfully",
+                "SYSTEM",
+                "DEBUG",
+                {
+                    "ada_orders": len(self.ada_grid.filled_orders),
+                    "avax_orders": len(self.avax_grid.filled_orders),
+                    "consecutive_failures": self.consecutive_failures,
+                },
+                self.session_id,
+            )
 
             return True
 
         except Exception as e:
             self.logger.error(f"❌ Critical error in run_cycle: {e}")
+
+            # Log cycle error to database
+            self.db_logger.log_bot_event(
+                "CYCLE_ERROR",
+                f"Trading cycle failed: {str(e)}",
+                "SYSTEM",
+                "ERROR",
+                {"error": str(e)},
+                self.session_id,
+            )
+
             self.consecutive_failures += 1
             return False
 
     async def run(self):
-        """Enhanced main bot loop with proper start/stop functionality"""
-        self.logger.info("🚀 Starting simplified trading bot...")
+        """Main bot loop with database logging"""
+        self.logger.info("🚀 Starting trading bot...")
 
-        # Log bot start
-        self.trade_logger.log_bot_event(
-            "START",
-            "Simplified trading bot started",
+        # Log bot start to database
+        self.db_logger.log_bot_event(
+            "BOT_START",
+            "Trading bot started",
             "SYSTEM",
             "INFO",
             {
                 "session_id": self.session_id,
                 "start_time": datetime.now().isoformat(),
-                "version": "simplified_v1.0",
+                "version": "database_v1.0",
             },
             self.session_id,
         )
@@ -670,13 +699,10 @@ class TradingBot:
             try:
                 await telegram_notifier.notify_bot_status(
                     "started",
-                    "🤖 Simplified Trading Bot Online!\n"
-                    "✅ Grid persistence removed - more reliable\n"
-                    "✅ Fresh grids every restart - no state corruption\n"
-                    "✅ Smart execution: Profit protection enabled\n"
-                    "✅ Portfolio monitoring: Removed (fixes -2015 errors)\n"
-                    "Commands: /start for help\n"
-                    "Use /resume to start trading!",
+                    "🤖 Trading Bot Online!\n"
+                    "✅ Simplified & reliable architecture\n"
+                    "✅ All data persisted to database\n"
+                    "Commands: /start for help",
                 )
             except Exception as e:
                 self.logger.warning(f"Startup notification failed: {e}")
@@ -686,27 +712,16 @@ class TradingBot:
             return
 
         # Initialize bot state
-        self.running = True  # Start in running state
-        bot_alive = True  # Controls whether bot stays alive
+        self.running = True
+        bot_alive = True
         cycle_count = 0
-        last_health_check = 0
 
         try:
-            # MAIN BOT LOOP - Always running
             while bot_alive:
-                # TRADING SECTION - Only when self.running = True
                 if self.running:
                     cycle_count += 1
-                    cycle_start_time = time.time()
-
                     self.logger.info(f"📊 Cycle {cycle_count} starting...")
 
-                    # Health check every 10 cycles (5 minutes)
-                    if time.time() - last_health_check > 300:
-                        await self._perform_health_check()
-                        last_health_check = time.time()
-
-                    # Run trading cycle
                     try:
                         await self.run_cycle()
                         if self.consecutive_failures > 0:
@@ -718,25 +733,12 @@ class TradingBot:
                         self.consecutive_failures += 1
                         self.logger.error(f"❌ Trading cycle {cycle_count} failed: {e}")
 
-                        # Log error
-                        self.trade_logger.log_bot_event(
-                            "CYCLE_ERROR",
-                            f"Trading cycle failed: {str(e)}",
-                            "TRADING",
-                            "ERROR",
-                            {
-                                "cycle": cycle_count,
-                                "consecutive_failures": self.consecutive_failures,
-                            },
-                            self.session_id,
-                        )
-
                     # Emergency stop check
                     if self.consecutive_failures >= self.max_consecutive_failures:
                         critical_msg = f"🚨 Too many consecutive failures ({self.consecutive_failures}) - stopping trading"
                         self.logger.critical(critical_msg)
 
-                        self.trade_logger.log_bot_event(
+                        self.db_logger.log_bot_event(
                             "EMERGENCY_STOP",
                             critical_msg,
                             "SYSTEM",
@@ -750,27 +752,13 @@ class TradingBot:
                                 "error", critical_msg
                             )
 
-                        # Stop trading but keep bot alive
                         self.running = False
                         continue
 
-                    # Log cycle performance
-                    cycle_time = time.time() - cycle_start_time
-                    if cycle_time > 10:
-                        self.logger.warning(
-                            f"⏱️ Slow cycle {cycle_count}: {cycle_time:.2f}s"
-                        )
-
-                    # Wait before next cycle (30 seconds)
                     await asyncio.sleep(30)
 
                 else:
-                    # PAUSED SECTION - Trading stopped via /stop command
-                    self.logger.debug(
-                        "💤 Trading paused, waiting for /resume command..."
-                    )
-
-                    # Check if restart was requested via Telegram
+                    # Check for restart request
                     if (
                         hasattr(self.telegram_commands, "restart_requested")
                         and self.telegram_commands.restart_requested
@@ -780,26 +768,19 @@ class TradingBot:
                         )
                         self.running = True
                         self.telegram_commands.restart_requested = False
-                        self.consecutive_failures = (
-                            0  # Reset failures on manual restart
-                        )
+                        self.consecutive_failures = 0
                         continue
 
-                    # Just wait while paused
                     await asyncio.sleep(5)
 
         except KeyboardInterrupt:
             self.logger.info("👋 Shutting down trading bot (KeyboardInterrupt)...")
-            if telegram_notifier.enabled:
-                await telegram_notifier.notify_bot_status(
-                    "stopped", "Bot shutdown requested by user"
-                )
             bot_alive = False
 
         except Exception as e:
             self.logger.error(f"❌ Unexpected error in main loop: {e}")
 
-            self.trade_logger.log_bot_event(
+            self.db_logger.log_bot_event(
                 "CRITICAL_ERROR",
                 f"Unexpected error: {str(e)}",
                 "SYSTEM",
@@ -808,24 +789,18 @@ class TradingBot:
                 self.session_id,
             )
 
-            if telegram_notifier.enabled:
-                await telegram_notifier.notify_bot_status(
-                    "error", f"Critical error: {str(e)[:100]}"
-                )
             bot_alive = False
 
         finally:
-            # CLEANUP
+            # Cleanup
             self.running = False
-
-            # Stop telegram command processor
             self.telegram_commands.stop_command_processor()
             command_task.cancel()
 
-            # Log bot stop
-            self.trade_logger.log_bot_event(
-                "STOP",
-                "Simplified trading bot stopped",
+            # Log bot stop to database
+            self.db_logger.log_bot_event(
+                "BOT_STOP",
+                "Trading bot stopped",
                 "SYSTEM",
                 "INFO",
                 {
@@ -838,12 +813,13 @@ class TradingBot:
             if telegram_notifier.enabled:
                 await telegram_notifier.notify_bot_status(
                     "stopped",
-                    f"Simplified Trading Bot Stopped\n"
+                    f"Trading Bot Stopped\n"
                     f"Total cycles: {cycle_count}\n"
-                    f"Session time: {time.time() - self.start_time:.0f}s",
+                    f"Session time: {time.time() - self.start_time:.0f}s\n"
+                    f"All data saved to database",
                 )
 
-            self.logger.info("🛑 Simplified trading bot stopped")
+            self.logger.info("🛑 Trading bot stopped")
 
     async def _test_connection_with_retries(self):
         """Test connection with retries"""
@@ -864,94 +840,21 @@ class TradingBot:
                     await asyncio.sleep(5)
 
         self.logger.error("❌ Binance connection failed after all attempts")
+
+        # Log connection failure to database
+        self.db_logger.log_bot_event(
+            "CONNECTION_FAILED",
+            "Binance connection failed after all attempts",
+            "SYSTEM",
+            "CRITICAL",
+            {},
+            self.session_id,
+        )
+
         if telegram_notifier.enabled:
             await telegram_notifier.notify_bot_status(
                 "error", "Binance connection failed"
             )
-        return False
-
-    async def _perform_health_check(self):
-        """Perform health check"""
-        try:
-            test_price = self.binance.get_price("BTCUSDT")
-            if test_price:
-                self.logger.debug("✅ API health check passed")
-            else:
-                self.logger.warning("⚠️ API health check failed")
-        except Exception as e:
-            self.logger.warning(f"⚠️ API health check failed: {e}")
-
-    async def check_api_health(self):
-        """Quick API health check"""
-        try:
-            # Simple test - get BTC price (public endpoint)
-            btc_price = self.binance.get_price("BTCUSDT")
-            return btc_price is not None
-        except:
-            return False
-
-    async def check_internet_connection(self) -> bool:
-        """Simplified and reliable internet connectivity check"""
-        try:
-            # If Binance connection works, internet is working
-            if hasattr(self, "binance") and self.binance.test_connection():
-                return True
-
-            # Fallback: simple ping test
-            response = requests.get("https://httpbin.org/status/200", timeout=10)
-            return response.status_code == 200
-
-        except Exception as e:
-            self.logger.debug(f"Internet check failed: {e}")
-            return False
-
-    async def handle_network_failure(self):
-        """Handle network connection failures - IMPROVED"""
-        self.logger.warning("🌐 Network connectivity issues detected")
-
-        # Try Binance-specific recovery first
-        try:
-            if self.binance.test_connection():
-                self.logger.info("✅ Binance connection is actually working")
-                return True
-        except:
-            pass
-
-        # Notify via Telegram if possible
-        try:
-            if telegram_notifier.enabled:
-                await telegram_notifier.notify_warning(
-                    "Network connectivity issues detected - attempting recovery"
-                )
-        except:
-            pass  # Telegram might also be affected
-
-        # Wait and retry with shorter intervals
-        for retry_count in range(1, 6):  # Max 5 retries instead of 10
-            wait_time = retry_count * 30  # 30s, 60s, 90s, 120s, 150s
-
-            self.logger.info(f"🔄 Network retry {retry_count}/5 in {wait_time}s")
-            await asyncio.sleep(wait_time)
-
-            # Test Binance connection directly
-            try:
-                if self.binance.test_connection():
-                    self.logger.info("✅ Network connectivity restored")
-                    try:
-                        if telegram_notifier.enabled:
-                            await telegram_notifier.notify_info(
-                                "✅ Network connectivity restored"
-                            )
-                    except:
-                        pass
-                    return True
-            except Exception as e:
-                self.logger.debug(f"Retry {retry_count} failed: {e}")
-                continue
-
-        self.logger.error(
-            "❌ Network connectivity could not be restored after 5 attempts"
-        )
         return False
 
 
@@ -959,8 +862,6 @@ def main():
     """Main entry point"""
     if not env_loaded:
         print("❌ Could not load .env file. Please check the location.")
-        print("Expected locations:")
-        print("  - Project root: /home/aberdeev/crypto-trading/trading-bot/.env")
         return
 
     try:
@@ -970,17 +871,6 @@ def main():
         print("\n👋 Bot shutdown requested")
     except Exception as e:
         print(f"❌ Failed to start bot: {e}")
-        # Only try to send notification if event loop is available
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.create_task(
-                    telegram_notifier.notify_bot_status(
-                        "error", f"Failed to start bot: {e}"
-                    )
-                )
-        except:
-            pass  # If no event loop, just exit gracefully
 
 
 if __name__ == "__main__":
