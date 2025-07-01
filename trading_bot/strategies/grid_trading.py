@@ -4,13 +4,13 @@ import pandas as pd
 from typing import Dict, List, Optional
 
 class GridTrader:
-    def __init__(self, symbol: str, grid_size_percent: float = 2.0, num_grids: int = 10, 
+    def __init__(self, symbol: str, grid_size_percent: float = 2.0, num_grids: int = 8, 
                  base_order_size: float = 50.0):
         """
         Grid Trading Strategy
         
         Args:
-            symbol: Trading pair (e.g., 'SOLUSDT')
+            symbol: Trading pair (e.g., 'ADAUSDT', 'AVAXUSDT')
             grid_size_percent: Percentage between grid levels (default 2%)
             num_grids: Number of grid levels (default 10)
             base_order_size: Base order size in USDT (default $50)
@@ -35,7 +35,7 @@ class GridTrader:
         # Create buy levels below current price
         for i in range(1, self.num_grids + 1):
             price = current_price * (1 - self.grid_size * i)
-            quantity = round(self.base_order_size / price, 6)  # Round to 6 decimal places for SOL  # Calculate quantity based on USDT amount
+            quantity = round(self.base_order_size / price, 6)  # Calculate quantity based on USDT amount  # Calculate quantity based on USDT amount
             self.buy_levels.append({
                 'price': price,
                 'quantity': quantity,
@@ -46,7 +46,7 @@ class GridTrader:
         # Create sell levels above current price
         for i in range(1, self.num_grids + 1):
             price = current_price * (1 + self.grid_size * i)
-            quantity = round(self.base_order_size / current_price, 6)  # Round to 6 decimal places  # Use current price for quantity calculation
+            quantity = round(self.base_order_size / current_price, 6)  # Calculate appropriate precision  # Use current price for quantity calculation
             self.sell_levels.append({
                 'price': price,
                 'quantity': quantity,
@@ -195,7 +195,7 @@ class GridTrader:
 def test_grid_strategy():
     """Test grid strategy with sample data"""
     # Create grid trader
-    grid = GridTrader("SOLUSDT", grid_size_percent=2.0, num_grids=5, base_order_size=50)
+    grid = GridTrader("ADAUSDT", grid_size_percent=2.5, num_grids=8, base_order_size=50)
     
     # Setup grid
     current_price = 100.0
