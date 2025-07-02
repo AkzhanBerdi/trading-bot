@@ -1,5 +1,5 @@
-# trading_bot/main.py - MINIMAL VERSION
-"""Minimal Trading Bot - Pure Grid Control Only"""
+# trading_bot/main.py - COMPLETE VERSION WITH COMPOUNDING
+"""Complete Trading Bot - Grid Control + Compound Interest"""
 
 import asyncio
 import logging
@@ -37,15 +37,16 @@ env_loaded = find_and_load_env()
 # Local imports
 from strategies.grid_trading import GridTrader
 from utils.binance_client import BinanceManager
+from utils.compound_manager import CompoundManager  # Phase 2 enhancement
 from utils.risk_manager import RiskConfig, RiskManager
 from utils.telegram_notifier import telegram_notifier
 
 
 class TradingBot:
-    """Minimal trading bot - pure grid control"""
+    """Complete trading bot - grid control + compound interest"""
 
     def __init__(self):
-        """Initialize minimal trading bot"""
+        """Initialize complete trading bot"""
         self.setup_logging()
         self.logger = logging.getLogger(__name__)
 
@@ -57,15 +58,29 @@ class TradingBot:
             self.logger.error(f"❌ Failed to initialize Binance client: {e}")
             raise
 
-        # Initialize grid strategies - SIMPLIFIED
+        # Initialize compound manager FIRST - Phase 2 ✅ FIXED!
+        self.compound_manager = CompoundManager(DatabaseLogger(), base_order_size=100.0)
+        self.logger.info("🔄 Compound interest initialized")
+
+        # Get current compound order size for grid initialization
+        current_order_size = self.compound_manager.get_current_order_size()
+        self.logger.info(f"💰 Using compound order size: ${current_order_size:.0f}")
+
+        # Initialize grid strategies with compound order sizes ✅ FIXED!
         self.ada_grid = GridTrader(
-            "ADAUSDT", grid_size_percent=2.5, num_grids=8, base_order_size=100
+            "ADAUSDT",
+            grid_size_percent=2.5,
+            num_grids=8,
+            base_order_size=current_order_size,  # Use compound size!
         )
         self.avax_grid = GridTrader(
-            "AVAXUSDT", grid_size_percent=2.0, num_grids=8, base_order_size=100
+            "AVAXUSDT",
+            grid_size_percent=2.0,
+            num_grids=8,
+            base_order_size=current_order_size,  # Use compound size!
         )
 
-        # Bot state - SIMPLIFIED
+        # Bot state
         self.running = False
         self.grid_initialized = False
         self.start_time = time.time()
@@ -73,10 +88,10 @@ class TradingBot:
         self.consecutive_failures = 0
         self.max_consecutive_failures = 5
 
-        # Minimal database logging
+        # Database logging
         self.db_logger = DatabaseLogger()
 
-        # Simplified risk management - ONLY basic safety
+        # Risk management
         self.risk_manager = RiskManager(self.db_logger, RiskConfig())
         self.logger.info("🛡️ Risk management initialized")
 
@@ -85,7 +100,7 @@ class TradingBot:
             self, telegram_notifier, self.db_logger
         )
 
-        # Trading configuration - SIMPLIFIED
+        # Trading configuration
         self.sell_loss_tolerance = 0.01  # 1% max loss on sells
         self.buy_premium_tolerance = 0.02  # 2% max premium on buys
 
@@ -103,8 +118,24 @@ class TradingBot:
 
         self.logger = logging.getLogger(__name__)
 
+    def update_grid_order_sizes(self):
+        """Update grid trader order sizes when compound changes ✅ NEW!"""
+        try:
+            current_order_size = self.compound_manager.get_current_order_size()
+
+            # Update both grid traders
+            self.ada_grid.base_order_size = current_order_size
+            self.avax_grid.base_order_size = current_order_size
+
+            self.logger.info(
+                f"🔄 Grid order sizes updated to ${current_order_size:.0f}"
+            )
+
+        except Exception as e:
+            self.logger.error(f"❌ Error updating grid order sizes: {e}")
+
     async def initialize_grids(self):
-        """Initialize trading grids - SIMPLIFIED"""
+        """Initialize trading grids"""
         try:
             self.logger.info("🔄 Initializing trading grids...")
 
@@ -116,31 +147,43 @@ class TradingBot:
                 self.logger.error("❌ Could not get current prices")
                 return False
 
+            # Get compound info for logging
+            compound_info = self.compound_manager.get_compound_status()
+
             self.logger.info(
                 f"💰 Current prices: ADA=${ada_price:.4f}, AVAX=${avax_price:.4f}"
             )
+            self.logger.info(
+                f"📈 Order size: ${compound_info['current_order_size']:.0f} ({compound_info['order_multiplier']:.2f}x)"
+            )
 
-            # Create grids
+            # Create grids with compound order sizes
             self.ada_grid.setup_grid(ada_price)
             self.avax_grid.setup_grid(avax_price)
 
-            # Minimal database logging
+            # Database logging
             self.db_logger.log_bot_event(
                 "GRID_INIT",
-                f"Grids initialized - ADA: ${ada_price:.4f}, AVAX: ${avax_price:.4f}",
+                f"Grids initialized with compound orders - ADA: ${ada_price:.4f}, AVAX: ${avax_price:.4f}, Size: ${compound_info['current_order_size']:.0f}",
                 "INFO",
-                {"ada_price": ada_price, "avax_price": avax_price},
+                {
+                    "ada_price": ada_price,
+                    "avax_price": avax_price,
+                    "order_size": compound_info["current_order_size"],
+                    "multiplier": compound_info["order_multiplier"],
+                },
                 self.session_id,
             )
 
             self.grid_initialized = True
-            self.logger.info("✅ Grids created")
+            self.logger.info("✅ Grids created with compound interest")
 
             if telegram_notifier.enabled:
                 await telegram_notifier.notify_info(
                     f"🎯 Grids Initialized\n"
                     f"ADA: ${ada_price:.4f} | AVAX: ${avax_price:.4f}\n"
-                    f"Grid control ready! 🚀"
+                    f"Order Size: ${compound_info['current_order_size']:.0f} ({compound_info['order_multiplier']:.2f}x)\n"
+                    f"Grid control + compounding ready! 🚀"
                 )
 
             return True
@@ -150,7 +193,7 @@ class TradingBot:
             return False
 
     async def check_grid_strategies(self):
-        """Check grid strategies - SIMPLIFIED"""
+        """Check grid strategies"""
         # ADA Grid
         try:
             ada_price = self.binance.get_price("ADAUSDT")
@@ -182,7 +225,7 @@ class TradingBot:
             self.logger.error(f"❌ AVAX grid error: {e}")
 
     async def execute_smart_grid_order(self, grid_trader, signal):
-        """Execute grid order with basic risk checks - SIMPLIFIED"""
+        """Execute grid order with basic risk checks"""
         symbol = grid_trader.symbol
         action = signal["action"]
         grid_price = signal["price"]
@@ -192,7 +235,7 @@ class TradingBot:
         if not current_price:
             return False
 
-        # BASIC risk check - only check if trading is allowed
+        # Risk check
         trade_value = current_price * quantity
         allowed, reason = self.risk_manager.check_trade_permission(action, trade_value)
 
@@ -200,7 +243,7 @@ class TradingBot:
             self.logger.warning(f"🚫 {symbol} trade blocked: {reason}")
             return False
 
-        # SIMPLIFIED profit protection
+        # Profit protection
         price_diff_percent = (current_price - grid_price) / grid_price
 
         if action == "SELL":
@@ -223,11 +266,11 @@ class TradingBot:
                 )
                 return False
 
-        # Execute order - SIMPLIFIED
+        # Execute order
         return await self.execute_grid_order(grid_trader, signal)
 
     async def execute_grid_order(self, grid_trader, signal):
-        """Execute grid order - SIMPLIFIED"""
+        """Execute grid order with compound profit tracking ✅ ENHANCED!"""
         try:
             symbol = grid_trader.symbol
             action = signal["action"]
@@ -272,13 +315,43 @@ class TradingBot:
 
                 order_id = order.get("orderId", "N/A")
 
-                # Update risk manager - SIMPLIFIED
-                if action == "SELL":
-                    self.risk_manager.update_daily_pnl(0.5)  # Assume small profit
-                else:
-                    self.risk_manager.update_daily_pnl(0.1)  # Small positive for buy
+                # Calculate profit for compound interest ✅ ENHANCED!
+                actual_profit = 0
+                trade_pnl = 0
 
-                # Log to database - MINIMAL
+                if action == "SELL":
+                    # Calculate actual profit for compound interest
+                    buy_orders = [
+                        o for o in grid_trader.filled_orders if o.get("side") == "BUY"
+                    ]
+                    if buy_orders:
+                        # Use most recent buy for profit calculation
+                        recent_buy = max(
+                            buy_orders, key=lambda x: x.get("timestamp", 0)
+                        )
+                        buy_price = recent_buy.get("price", avg_price * 0.975)
+                        actual_profit = (avg_price - buy_price) * filled_quantity
+                        trade_pnl = 0.5  # Positive for sells
+
+                        # Record profit for compound interest ✅ KEY FIX!
+                        if actual_profit > 0:
+                            self.compound_manager.record_trade_profit(
+                                symbol, action, actual_profit
+                            )
+                            self.logger.info(
+                                f"💰 Recorded ${actual_profit:.2f} profit for compounding"
+                            )
+
+                            # Update grid order sizes if compound adjusted ✅ KEY FIX!
+                            self.update_grid_order_sizes()
+                    else:
+                        trade_pnl = 0.5
+                else:
+                    trade_pnl = 0.1  # Small positive for buy
+
+                self.risk_manager.update_daily_pnl(trade_pnl)
+
+                # Log to database
                 trade_id = self.db_logger.log_trade_execution(
                     symbol=symbol,
                     side=action,
@@ -298,11 +371,17 @@ class TradingBot:
                     "level": signal["level"],
                     "timestamp": time.time(),
                     "order_id": str(order_id),
+                    "profit": actual_profit,  # Track actual profit
                 }
                 grid_trader.filled_orders.append(filled_order)
 
-                # Success notification
+                # Success notification with compound info
                 if telegram_notifier.enabled:
+                    compound_info = self.compound_manager.get_compound_status()
+                    profit_msg = (
+                        f" (${actual_profit:.2f} profit)" if actual_profit > 0 else ""
+                    )
+
                     await telegram_notifier.notify_trade_success(
                         symbol=symbol,
                         action=action,
@@ -311,8 +390,17 @@ class TradingBot:
                         order_id=str(order_id),
                     )
 
+                    # Send compound update if order size changed
+                    if actual_profit > 0:
+                        await telegram_notifier.notify_info(
+                            f"💰 Compound Update\n"
+                            f"Profit: ${actual_profit:.2f}{profit_msg}\n"
+                            f"Order Size: ${compound_info['current_order_size']:.0f} ({compound_info['order_multiplier']:.2f}x)"
+                        )
+
                 self.logger.info(
                     f"✅ {action} filled: {filled_quantity} {symbol} @ ${avg_price:.6f}"
+                    f"{profit_msg}"
                 )
                 self.consecutive_failures = 0
                 return True
@@ -331,7 +419,7 @@ class TradingBot:
             return False
 
     async def run_cycle(self):
-        """Main trading cycle - SIMPLIFIED"""
+        """Main trading cycle"""
         try:
             # Initialize grids on first cycle
             if not self.grid_initialized:
@@ -359,15 +447,21 @@ class TradingBot:
             return False
 
     async def run(self):
-        """Main bot loop - SIMPLIFIED"""
-        self.logger.info("🚀 Starting minimal trading bot...")
+        """Main bot loop"""
+        self.logger.info("🚀 Starting complete trading bot with compound interest...")
 
         # Log bot start
+        compound_info = self.compound_manager.get_compound_status()
         self.db_logger.log_bot_event(
             "BOT_START",
-            "Minimal trading bot started",
+            "Complete trading bot started with compound interest",
             "INFO",
-            {"session_id": self.session_id, "version": "minimal_v1.0"},
+            {
+                "session_id": self.session_id,
+                "version": "complete_v1.0",
+                "initial_order_size": compound_info["current_order_size"],
+                "compound_multiplier": compound_info["order_multiplier"],
+            },
             self.session_id,
         )
 
@@ -375,16 +469,18 @@ class TradingBot:
         command_task = asyncio.create_task(
             self.telegram_commands.start_command_processor()
         )
-        self.logger.info("🤖 Telegram commands active")
+        self.logger.info("🤖 Telegram commands active (with compounding)")
 
         # Startup notification
         if telegram_notifier.enabled:
             try:
+                compound_info = self.compound_manager.get_compound_status()
                 await telegram_notifier.notify_bot_status(
                     "started",
-                    "🤖 Minimal Trading Bot Online!\n"
-                    "✅ Pure grid control\n"
-                    "✅ Essential safety only\n"
+                    "🤖 Complete Trading Bot Online!\n"
+                    "✅ Grid trading with compound interest\n"
+                    f"✅ Order size: ${compound_info['current_order_size']:.0f} ({compound_info['order_multiplier']:.2f}x)\n"
+                    "✅ Automatic profit growth\n"
                     "Commands: /start for help",
                 )
             except Exception as e:
@@ -395,7 +491,7 @@ class TradingBot:
             self.logger.error("❌ Binance connection failed")
             return
 
-        # Main loop - SIMPLIFIED
+        # Main loop
         self.running = True
         cycle_count = 0
 
@@ -444,7 +540,8 @@ class TradingBot:
             self.telegram_commands.stop_command_processor()
             command_task.cancel()
 
-            # Log bot stop
+            # Log bot stop with compound stats
+            compound_info = self.compound_manager.get_compound_status()
             self.db_logger.log_bot_event(
                 "BOT_STOP",
                 "Bot stopped",
@@ -452,6 +549,9 @@ class TradingBot:
                 {
                     "total_cycles": cycle_count,
                     "session_duration": time.time() - self.start_time,
+                    "final_order_size": compound_info["current_order_size"],
+                    "final_multiplier": compound_info["order_multiplier"],
+                    "total_accumulated_profit": compound_info["accumulated_profit"],
                 },
                 self.session_id,
             )
@@ -459,10 +559,14 @@ class TradingBot:
             if telegram_notifier.enabled:
                 await telegram_notifier.notify_bot_status(
                     "stopped",
-                    f"Bot Stopped\nCycles: {cycle_count}\nTime: {time.time() - self.start_time:.0f}s",
+                    f"🛑 Bot Stopped\n"
+                    f"Cycles: {cycle_count}\n"
+                    f"Time: {time.time() - self.start_time:.0f}s\n"
+                    f"Final Order Size: ${compound_info['current_order_size']:.0f}\n"
+                    f"Compound Multiplier: {compound_info['order_multiplier']:.2f}x",
                 )
 
-            self.logger.info("🛑 Bot stopped")
+            self.logger.info("🛑 Complete bot stopped")
 
 
 def main():
