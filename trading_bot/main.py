@@ -518,7 +518,7 @@ class TradingBot:
                         self.running = False
                         continue
 
-                    await asyncio.sleep(30)
+                    await asyncio.sleep(15)
 
                 else:
                     # Check for restart request
