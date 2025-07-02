@@ -16,7 +16,7 @@ class GridTradingConfig:
 
     grid_size_percent: float = 2.0
     num_grids: int = 8
-    base_order_size: float = 50.0
+    base_order_size: float = 100.0
     max_open_orders: int = 20
 
 
@@ -73,13 +73,13 @@ ASSET_CONFIGS = {
     "ADA": {
         "grid_size_percent": 2.5,  # 2.5% spacing for ADA
         "num_grids": 8,
-        "base_order_size": 50.0,
+        "base_order_size": 100.0,
         "symbol": "ADAUSDT",
     },
     "AVAX": {
         "grid_size_percent": 2.0,  # 2.0% spacing for AVAX
         "num_grids": 8,
-        "base_order_size": 50.0,
+        "base_order_size": 100.0,
         "symbol": "AVAXUSDT",
     },
 }

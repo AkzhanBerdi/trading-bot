@@ -1,64 +1,360 @@
-# utils/telegram_commands.py
+# trading_bot/utils/telegram_commands.py - ULTRA-MINIMAL VERSION
+"""Ultra-Minimal Telegram Commands - Essential Bot Control Only"""
+
 import asyncio
 import time
-from datetime import datetime
 from typing import Dict
 
 import requests
 
 
 class TelegramBotCommands:
-    """Database Telegram bot command handler"""
+    """Ultra-minimal bot control commands only"""
 
     def __init__(self, trading_bot, telegram_notifier, db_logger):
         self.trading_bot = trading_bot
         self.telegram_notifier = telegram_notifier
         self.db_logger = db_logger
 
-        # Command handlers
+        # MINIMAL commands - essential bot control only
         self.commands = {
             "/start": self.cmd_start,
-            "/stop": self.cmd_stop_bot,
-            "/resume": self.cmd_resume_bot,
-            "/status": self.cmd_status,
-            "/trades": self.cmd_recent_trades,
-            "/portfolio": self.cmd_portfolio,
-            "/balance": self.cmd_balance,
-            "/stats": self.cmd_stats,
-            "/health": self.cmd_health_check,
+            "/stop": self.cmd_smart_stop,
+            "/resume": self.cmd_smart_resume,
+            "/status": self.cmd_simple_status,
+            "/risk": self.cmd_risk_status,
             "/reset": self.cmd_reset,
-            "/help": self.cmd_help,
-            "/performance": self.cmd_performance,
-            "/events": self.cmd_recent_events,
-            "/db": self.cmd_database_stats,
+            "/help": self.cmd_start,
         }
 
         self.last_update_id = 0
         self.command_processor_running = False
-        self.command_history = []
         self.rate_limit = {}
         self.restart_requested = False
 
+    # =============================================================================
+    # ESSENTIAL COMMANDS ONLY
+    # =============================================================================
+
+    async def cmd_start(self, message):
+        """Minimal start/help command"""
+        try:
+            uptime = self.get_uptime()
+            risk_info = self.trading_bot.risk_manager.get_risk_status()
+
+            mode_emoji = {
+                "NORMAL": "🟢",
+                "CONSERVATIVE": "🟡",
+                "EMERGENCY_STOP": "🔴",
+                "CIRCUIT_BREAKER": "🚨",
+            }.get(risk_info["mode"], "❓")
+
+            reply = f"""🤖 **Simple Grid Trading Bot**
+
+**Essential Controls:**
+/stop - Stop trading
+/resume - Resume trading  
+/status - Bot status
+/risk - Risk status
+/reset - Reset grids
+
+**Current Status:**
+• Bot: {"🟢 Running" if self.trading_bot.running else "🔴 Stopped"}  
+• Risk: {mode_emoji} {risk_info["mode"]} ({risk_info["daily_pnl"]:+.1f}%)
+• Uptime: {uptime}
+
+*Use Binance app for portfolio/trades*
+*This bot = grid control only*
+"""
+            await self.send_reply(message, reply)
+
+        except Exception as e:
+            await self.send_reply(message, f"❌ Error: {str(e)[:100]}")
+
+    async def cmd_smart_stop(self, message):
+        """Smart stop with automatic emergency detection"""
+        try:
+            if not self.trading_bot.running:
+                await self.send_reply(message, "ℹ️ Trading is already stopped.")
+                return
+
+            # Stop trading
+            self.trading_bot.running = False
+            self.restart_requested = False
+
+            # Get risk status for smart handling
+            risk_info = self.trading_bot.risk_manager.get_risk_status()
+
+            # Smart stop logic
+            if risk_info["daily_pnl"] < -1.0:  # Emergency stop for losses
+                self.trading_bot.risk_manager.trigger_emergency_stop()
+                stop_type = "EMERGENCY"
+                icon = "🚨"
+                reason = "losses detected"
+            else:  # Normal stop
+                stop_type = "MANUAL"
+                icon = "🛑"
+                reason = "manual request"
+
+            # Log to database
+            self.db_logger.log_bot_event(
+                f"{stop_type}_STOP",
+                f"Trading stopped: {reason}",
+                "TELEGRAM",
+                "WARNING" if stop_type == "EMERGENCY" else "INFO",
+                {"stop_type": stop_type, "daily_pnl": risk_info["daily_pnl"]},
+                self.trading_bot.session_id,
+            )
+
+            await self.send_reply(
+                message,
+                f"{icon} **Trading Stopped**\n\n"
+                f"Reason: {reason}\n"
+                f"Daily P&L: {risk_info['daily_pnl']:+.1f}%\n\n"
+                f"Use /resume to restart",
+            )
+
+        except Exception as e:
+            await self.send_reply(message, f"❌ Error stopping: {str(e)[:100]}")
+
+    async def cmd_smart_resume(self, message):
+        """Smart resume with risk checking"""
+        try:
+            if self.trading_bot.running:
+                await self.send_reply(message, "ℹ️ Trading is already running.")
+                return
+
+            # Check risk status
+            risk_info = self.trading_bot.risk_manager.get_risk_status()
+            current_mode = risk_info["mode"]
+
+            # Handle different risk states
+            if current_mode in ["EMERGENCY_STOP", "CIRCUIT_BREAKER"]:
+                # Check if we can auto-resume
+                if risk_info["daily_pnl"] > -2.0:  # Conditions improved
+                    self.trading_bot.risk_manager.reset_to_normal()
+                    await self._do_resume(message, "Risk conditions improved")
+                else:
+                    # Need manual override
+                    await self.send_reply(
+                        message,
+                        f"⚠️ **Cannot Resume**\n\n"
+                        f"Risk mode: {current_mode}\n"
+                        f"Daily P&L: {risk_info['daily_pnl']:+.1f}%\n\n"
+                        f"Use `/risk override` to force resume",
+                    )
+            else:
+                # Normal resume
+                await self._do_resume(message, "Normal resume")
+
+        except Exception as e:
+            await self.send_reply(message, f"❌ Error resuming: {str(e)[:100]}")
+
+    async def _do_resume(self, message, reason: str):
+        """Actually resume trading - FIXED NoneType error"""
+        try:
+            self.trading_bot.running = True
+            self.restart_requested = True
+            self.trading_bot.consecutive_failures = 0
+
+            # Log to database
+            self.db_logger.log_bot_event(
+                "TRADING_RESUMED",
+                f"Trading resumed: {reason}",
+                "TELEGRAM",
+                "INFO",
+                {"reason": reason},
+                self.trading_bot.session_id,
+            )
+
+            # Get current risk info
+            risk_info = self.trading_bot.risk_manager.get_risk_status()
+
+            await self.send_reply(
+                message,  # FIXED: was None before
+                f"🚀 **Trading Resumed**\n\n"
+                f"Reason: {reason}\n"
+                f"Risk Mode: {risk_info['mode']}\n"
+                f"Daily P&L: {risk_info['daily_pnl']:+.1f}%",
+            )
+
+        except Exception as e:
+            await self.send_reply(message, f"❌ Resume error: {str(e)[:100]}")
+
+    async def cmd_risk_status(self, message):
+        """Risk status with override option"""
+        try:
+            # Check for override command
+            text = message.get("text", "").strip()
+            if "override" in text.lower():
+                return await self._handle_risk_override(message)
+
+            # Regular risk status
+            risk_info = self.trading_bot.risk_manager.get_risk_status()
+
+            mode_emoji = {
+                "NORMAL": "🟢",
+                "EMERGENCY_STOP": "🔴",
+            }.get(risk_info["mode"], "❓")
+
+            reply = f"""🛡️ **Risk Status**
+        
+**Mode:** {mode_emoji} {risk_info["mode"]}
+**Daily P&L:** {risk_info["daily_pnl"]:+.1f}%
+**Daily Trades:** {risk_info["daily_trades"]}/{risk_info["risk_limits"]["daily_trade_limit"]}
+
+**Limits:**
+• Daily Loss: {risk_info["risk_limits"]["daily_loss_limit"]}%
+• Emergency Stop: {risk_info["risk_limits"]["emergency_stop"]}%
+"""
+
+            # Add override option if needed
+            if risk_info["mode"] == "EMERGENCY_STOP":
+                reply += "\n⚠️ Use `/risk override` to force resume"
+
+            await self.send_reply(message, reply)
+
+        except Exception as e:
+            await self.send_reply(message, f"❌ Risk error: {str(e)[:100]}")
+
+    async def _handle_risk_override(self, message):
+        """Handle risk override"""
+        try:
+            risk_info = self.trading_bot.risk_manager.get_risk_status()
+            old_mode = risk_info["mode"]
+
+            # Reset to normal
+            self.trading_bot.risk_manager.reset_to_normal()
+
+            # Log override
+            self.db_logger.log_bot_event(
+                "RISK_OVERRIDE",
+                f"Risk override: {old_mode} → NORMAL",
+                "TELEGRAM",
+                "WARNING",
+                {"old_mode": old_mode, "daily_pnl": risk_info["daily_pnl"]},
+                self.trading_bot.session_id,
+            )
+
+            await self.send_reply(
+                message,
+                f"⚠️ **Risk Override Applied**\n\n"
+                f"{old_mode} → NORMAL\n\n"
+                f"Use /resume to restart trading\n"
+                f"*Proceed with caution*",
+            )
+
+        except Exception as e:
+            await self.send_reply(message, f"❌ Override error: {str(e)[:100]}")
+
+    async def cmd_simple_status(self, message):
+        """Simple bot status only"""
+        try:
+            uptime = self.get_uptime()
+            failures = getattr(self.trading_bot, "consecutive_failures", 0)
+            risk_info = self.trading_bot.risk_manager.get_risk_status()
+
+            mode_emoji = {
+                "NORMAL": "🟢",
+                "EMERGENCY_STOP": "🔴",
+            }.get(risk_info["mode"], "❓")
+
+            # Grid status
+            ada_orders = (
+                len(self.trading_bot.ada_grid.filled_orders)
+                if hasattr(self.trading_bot, "ada_grid")
+                else 0
+            )
+            avax_orders = (
+                len(self.trading_bot.avax_grid.filled_orders)
+                if hasattr(self.trading_bot, "avax_grid")
+                else 0
+            )
+
+            reply = f"""📊 **Bot Status**
+
+**System:**
+• Status: {"🟢 Running" if self.trading_bot.running else "🔴 Stopped"}
+• Uptime: {uptime}
+• Failures: {failures}
+
+**Risk:**
+• Mode: {mode_emoji} {risk_info["mode"]}
+• Daily P&L: {risk_info["daily_pnl"]:+.1f}%
+• Daily Trades: {risk_info["daily_trades"]}/{risk_info["risk_limits"]["daily_trade_limit"]}
+
+**Grids:**
+• ADA Orders: {ada_orders}
+• AVAX Orders: {avax_orders}
+• Active: {"🟢 Yes" if getattr(self.trading_bot, "grid_initialized", False) else "🔴 No"}
+
+*Check Binance app for portfolio*
+"""
+            await self.send_reply(message, reply)
+
+        except Exception as e:
+            await self.send_reply(message, f"❌ Status error: {str(e)[:100]}")
+
+    async def cmd_reset(self, message):
+        """Reset grid levels"""
+        try:
+            # Get current prices
+            ada_price = self.trading_bot.binance.get_price("ADAUSDT")
+            avax_price = self.trading_bot.binance.get_price("AVAXUSDT")
+
+            if not ada_price or not avax_price:
+                await self.send_reply(message, "❌ Cannot get current prices")
+                return
+
+            # Reset grids
+            self.trading_bot.ada_grid.setup_grid(ada_price)
+            self.trading_bot.avax_grid.setup_grid(avax_price)
+
+            # Log to database
+            self.db_logger.log_bot_event(
+                "GRID_RESET",
+                f"Grids reset via Telegram - ADA: ${ada_price:.4f}, AVAX: ${avax_price:.4f}",
+                "TELEGRAM",
+                "INFO",
+                {"ada_price": ada_price, "avax_price": avax_price},
+                self.trading_bot.session_id,
+            )
+
+            await self.send_reply(
+                message,
+                f"🔄 **Grids Reset**\n\n"
+                f"ADA: ${ada_price:.4f}\n"
+                f"AVAX: ${avax_price:.4f}\n\n"
+                f"All levels cleared and recreated",
+            )
+
+        except Exception as e:
+            await self.send_reply(message, f"❌ Reset error: {str(e)[:100]}")
+
+    # =============================================================================
+    # CORE INFRASTRUCTURE
+    # =============================================================================
+
     async def start_command_processor(self):
-        """Start command processor"""
+        """Start minimal command processor"""
         if not self.telegram_notifier.enabled:
             return
 
         self.command_processor_running = True
-        print("🤖 Database Telegram command processor started")
+        print("🤖 Minimal Telegram commands active")
 
         while self.command_processor_running:
             try:
                 await self.process_updates()
                 await asyncio.sleep(1)
             except Exception as e:
-                print(f"Error in command processor: {e}")
+                print(f"Command processor error: {e}")
                 await asyncio.sleep(5)
 
     def stop_command_processor(self):
         """Stop command processor"""
         self.command_processor_running = False
-        print("🛑 Telegram command processor stopped")
+        print("🛑 Command processor stopped")
 
     async def process_updates(self):
         """Process telegram updates"""
@@ -80,10 +376,10 @@ class TelegramBotCommands:
 
         except Exception as e:
             if "timeout" not in str(e).lower():
-                print(f"Error processing updates: {e}")
+                print(f"Update processing error: {e}")
 
     async def handle_update(self, update: Dict):
-        """Handle incoming update"""
+        """Handle incoming telegram updates"""
         try:
             if "message" not in update:
                 return
@@ -102,40 +398,35 @@ class TelegramBotCommands:
 
             # Rate limiting
             if self._is_rate_limited(user_id, text):
-                await self.send_reply(
-                    message, "⏱️ Please wait before sending another command."
-                )
+                await self.send_reply(message, "⏱️ Wait a moment...")
                 return
 
-            # Log command to database
+            # Log command
             self.db_logger.log_bot_event(
                 "TELEGRAM_COMMAND",
-                f"Command received: {text}",
+                f"Command: {text}",
                 "TELEGRAM",
                 "INFO",
-                {"user_id": user_id, "command": text},
+                {"command": text},
                 self.trading_bot.session_id,
             )
 
             # Execute command
             for command, handler in self.commands.items():
                 if text.startswith(command):
-                    print(f"📱 Executing command: {command}")
+                    print(f"📱 Executing: {command}")
                     try:
                         await handler(message)
                     except Exception as e:
-                        print(f"Error executing command {command}: {e}")
-                        await self.send_reply(message, f"❌ Error: {str(e)[:100]}")
+                        print(f"Command error {command}: {e}")
+                        await self.send_reply(message, f"❌ Error: {str(e)[:50]}")
                     break
             else:
                 if text.startswith("/"):
-                    await self.send_reply(
-                        message,
-                        "❓ Unknown command. Send /help for available commands.",
-                    )
+                    await self.send_reply(message, "❓ Unknown command. Try /help")
 
         except Exception as e:
-            print(f"Error handling update: {e}")
+            print(f"Update handling error: {e}")
 
     def _is_rate_limited(self, user_id: int, command: str) -> bool:
         """Simple rate limiting"""
@@ -152,12 +443,16 @@ class TelegramBotCommands:
     async def send_reply(
         self, original_message: Dict, text: str, parse_mode: str = "Markdown"
     ):
-        """Send reply to Telegram"""
+        """Send telegram reply"""
         try:
-            cleaned_text = text.replace("_", "\\_")
+            if not original_message:  # Safety check
+                print("⚠️ Cannot send reply - no message object")
+                return False
 
+            # Clean text
+            cleaned_text = text.replace("_", "\\_")
             if len(cleaned_text) > 4000:
-                cleaned_text = cleaned_text[:3950] + "\n\n... (truncated)"
+                cleaned_text = cleaned_text[:3950] + "\n\n...(truncated)"
 
             url = f"https://api.telegram.org/bot{self.telegram_notifier.bot_token}/sendMessage"
             payload = {
@@ -171,518 +466,24 @@ class TelegramBotCommands:
             response = requests.post(url, json=payload, timeout=10)
 
             if response.status_code != 200:
-                # Try without markdown
+                # Retry without markdown
                 payload["parse_mode"] = None
                 requests.post(url, json=payload, timeout=10)
 
             return True
 
         except Exception as e:
-            print(f"Error sending reply: {e}")
+            print(f"Reply send error: {e}")
             return False
 
-    # =============================================================================
-    # COMMAND HANDLERS
-    # =============================================================================
-
-    async def cmd_start(self, message):
-        """Enhanced start command"""
-        uptime = self.get_uptime()
-
-        # Get stats from database
-        stats = self.db_logger.get_trading_statistics(1)
-
-        # Get portfolio value
-        portfolio_text = "Loading..."
-        try:
-            portfolio, total_value = await self.trading_bot.get_portfolio_status()
-            portfolio_text = f"${total_value:.2f}"
-        except:
-            pass
-
-        reply = f"""🤖 *Database Trading Bot*
-
-*🎛️ Bot Control:*
-/resume - Start trading
-/stop - Stop trading  
-/status - Bot status
-/health - System health
-
-*📊 Data & Analytics:*
-/portfolio - Portfolio summary
-/balance - Account balances
-/trades - Recent trades
-/stats - Trading statistics
-/performance - Performance metrics
-/events - Recent events
-
-*🔧 Management:*
-/reset - Reset grids
-/db - Database statistics
-/help - This help menu
-
-*📈 Current Status:*
-Bot: {"🟢 Running" if self.trading_bot.running else "🔴 Stopped"}
-Uptime: {uptime}
-Today's Trades: {stats.get("total_trades", 0)}
-Portfolio: {portfolio_text}
-
-*🗄️ All data stored in SQLite database*
-"""
-        await self.send_reply(message, reply)
-
-    async def cmd_stop_bot(self, message):
-        """Stop trading"""
-        try:
-            if self.trading_bot.running:
-                self.trading_bot.running = False
-                self.restart_requested = False
-
-                # Log to database
-                self.db_logger.log_bot_event(
-                    "TRADING_PAUSED",
-                    "Trading paused via Telegram /stop command",
-                    "TELEGRAM",
-                    "INFO",
-                    {},
-                    self.trading_bot.session_id,
-                )
-
-                await self.send_reply(
-                    message,
-                    "🛑 *Trading Paused*\n\nBot is still running but not trading.\nSend /resume to restart trading.",
-                )
-            else:
-                await self.send_reply(message, "ℹ️ Trading is already paused.")
-        except Exception:
-            await self.send_reply(message, "❌ Error pausing trading")
-
-    async def cmd_resume_bot(self, message):
-        """Resume trading"""
-        try:
-            if not self.trading_bot.running:
-                self.trading_bot.running = True
-                self.restart_requested = True
-                self.trading_bot.consecutive_failures = 0
-
-                # Log to database
-                self.db_logger.log_bot_event(
-                    "TRADING_RESUMED",
-                    "Trading resumed via Telegram /resume command",
-                    "TELEGRAM",
-                    "INFO",
-                    {},
-                    self.trading_bot.session_id,
-                )
-
-                await self.send_reply(
-                    message,
-                    "🚀 *Trading Resumed*\n\nBot is now actively monitoring and trading.",
-                )
-            else:
-                await self.send_reply(message, "ℹ️ Trading is already active.")
-        except Exception:
-            await self.send_reply(message, "❌ Error resuming trading")
-
-    async def cmd_status(self, message):
-        """Get bot status from database"""
-        try:
-            status = "🟢 Running" if self.trading_bot.running else "🔴 Stopped"
-            uptime = self.get_uptime()
-
-            # Get stats from database
-            stats_1d = self.db_logger.get_trading_statistics(1)
-
-            # Get grid status from memory
-            ada_filled = (
-                len(self.trading_bot.ada_grid.filled_orders)
-                if hasattr(self.trading_bot, "ada_grid")
-                else 0
-            )
-            avax_filled = (
-                len(self.trading_bot.avax_grid.filled_orders)
-                if hasattr(self.trading_bot, "avax_grid")
-                else 0
-            )
-
-            # System health
-            health_status = "🟢 Healthy"
-            failures = getattr(self.trading_bot, "consecutive_failures", 0)
-            if failures > 2:
-                health_status = "⚠️ Warning"
-            elif failures >= 5:
-                health_status = "🔴 Critical"
-
-            reply = f"""📊 *Bot Status (Database-Only)*
-
-*🤖 System:*
-Status: {status}
-Health: {health_status}
-Uptime: {uptime}
-Failures: {failures}
-
-*📈 Trading (24h):*
-• Trades: {stats_1d.get("total_trades", 0)}
-• Volume: ${stats_1d.get("total_volume", 0):.2f}
-• Commission: ${stats_1d.get("total_commission", 0):.4f}
-
-*📊 Grid Status:*
-• ADA Orders: {ada_filled}
-• AVAX Orders: {avax_filled}
-• Grid Active: {"🟢 Yes" if getattr(self.trading_bot, "grid_initialized", False) else "🔴 No"}
-
-*🗄️ Data Source: SQLite Database*
-"""
-            await self.send_reply(message, reply)
-
-        except Exception as e:
-            await self.send_reply(message, f"❌ Error getting status: {str(e)[:100]}")
-
-    async def cmd_recent_trades(self, message):
-        """Get recent trades from database"""
-        try:
-            trades = self.db_logger.get_recent_trades(8, 48)
-
-            if not trades:
-                await self.send_reply(message, "📈 No recent trades in database.")
-                return
-
-            reply = "📈 *Recent Trades (from Database):*\n\n"
-
-            for trade in trades:
-                timestamp = trade["timestamp"][:16] if trade["timestamp"] else "Unknown"
-                side_emoji = "🟢" if trade["side"] == "BUY" else "🔴"
-
-                symbol = trade["symbol"]
-                quantity = trade["quantity"]
-                price = trade["price"]
-                value = trade["total_value"]
-                level = trade.get("grid_level", "N/A")
-
-                reply += f"{side_emoji} *{symbol}* {trade['side']}\n"
-                reply += f"   📦 Qty: `{quantity:.6f}` @ `${price:.6f}`\n"
-                reply += f"   💰 Value: `${value:.2f}` | Level: `{level}`\n"
-                reply += f"   🕐 {timestamp}\n\n"
-
-            # Summary
-            total_volume = sum(trade["total_value"] for trade in trades)
-            buy_count = len([t for t in trades if t["side"] == "BUY"])
-            sell_count = len([t for t in trades if t["side"] == "SELL"])
-
-            reply += "*📊 Summary:*\n"
-            reply += f"Total Volume: `${total_volume:.2f}`\n"
-            reply += f"Buy/Sell: `{buy_count}/{sell_count}`"
-
-            await self.send_reply(message, reply)
-
-        except Exception as e:
-            await self.send_reply(message, f"❌ Error getting trades: {str(e)[:100]}")
-
-    async def cmd_portfolio(self, message):
-        """Get portfolio from live API and database history"""
-        try:
-            portfolio, total_value = await self.trading_bot.get_portfolio_status()
-
-            reply = "💰 *Portfolio Summary*\n\n"
-            reply += f"Total Value: `${total_value:.2f}`\n\n"
-
-            if portfolio:
-                reply += "*💎 Holdings:*\n"
-                for asset, data in portfolio.items():
-                    quantity = data.get("quantity", 0)
-                    value = data.get("usd_value", 0)
-                    if quantity > 0:
-                        percentage = (
-                            (value / total_value * 100) if total_value > 0 else 0
-                        )
-                        reply += f"• {asset}: `{quantity:.6f}` (${value:.2f} - {percentage:.1f}%)\n"
-
-            # Get recent portfolio history from database
-            history = self.db_logger.get_portfolio_history(7)
-            if history:
-                reply += "\n*📈 Recent History:*\n"
-                reply += f"Records in database: {len(history)}\n"
-                if len(history) > 1:
-                    oldest = history[-1]["total_value"]
-                    change = total_value - oldest
-                    change_pct = (change / oldest * 100) if oldest > 0 else 0
-                    reply += f"7-day change: `${change:+.2f}` ({change_pct:+.1f}%)"
-
-            reply += "\n\n*🗄️ Data from: Live API + Database History*"
-            await self.send_reply(message, reply)
-
-        except Exception as e:
-            await self.send_reply(
-                message, f"❌ Error getting portfolio: {str(e)[:100]}"
-            )
-
-    async def cmd_balance(self, message):
-        """Get account balances"""
-        try:
-            balances = self.trading_bot.binance.get_account_balance()
-
-            reply = "💳 *Account Balances:*\n\n"
-
-            if balances:
-                for balance in balances:
-                    if balance["total"] > 0.001:
-                        reply += f"• {balance['asset']}: `{balance['free']:.6f}`\n"
-                        if balance["locked"] > 0:
-                            reply += f"  (Locked: `{balance['locked']:.6f}`)\n"
-            else:
-                reply = "No balance data available."
-
-            await self.send_reply(message, reply)
-
-        except Exception as e:
-            await self.send_reply(message, f"❌ Error getting balances: {str(e)[:100]}")
-
-    async def cmd_stats(self, message):
-        """Get trading statistics"""
-        try:
-            stats_1d = self.db_logger.get_trading_statistics(1)
-            stats_7d = self.db_logger.get_trading_statistics(7)
-
-            reply = f"""📊 *Trading Statistics*
-
-*Last 24 Hours:*
-• Trades: {stats_1d.get("total_trades", 0)}
-• Volume: ${stats_1d.get("total_volume", 0):.2f}
-• Commission: ${stats_1d.get("total_commission", 0):.4f}
-• Avg Trade: ${stats_1d.get("avg_trade_size", 0):.2f}
-
-*Last 7 Days:*
-• Trades: {stats_7d.get("total_trades", 0)}
-• Volume: ${stats_7d.get("total_volume", 0):.2f}
-• Commission: ${stats_7d.get("total_commission", 0):.4f}
-• Symbols: {stats_7d.get("symbols_traded", 0)}
-• Avg Trade: ${stats_7d.get("avg_trade_size", 0):.2f}
-• Commission Rate: {stats_7d.get("commission_rate", 0):.3f}%
-"""
-
-            if stats_7d.get("avg_execution_time"):
-                reply += f"• Avg Execution: {stats_7d['avg_execution_time']:.0f}ms"
-
-            reply += "\n\n*🗄️ Source: SQLite*"
-            await self.send_reply(message, reply)
-
-        except Exception as e:
-            await self.send_reply(
-                message, f"❌ Error getting statistics: {str(e)[:100]}"
-            )
-
-    async def cmd_health_check(self, message):
-        """System health check"""
-        try:
-            health_report = "🏥 *System Health Check*\n\n"
-
-            # API Health
-            try:
-                api_healthy = self.trading_bot.binance.test_connection()
-                health_report += (
-                    f"🌐 API: {'🟢 Healthy' if api_healthy else '🔴 Issues'}\n"
-                )
-            except:
-                health_report += "🌐 API: ❓ Unknown\n"
-
-            # Database Health
-            try:
-                db_stats = self.db_logger.get_database_stats()
-                trades_count = db_stats.get("trades_count", 0)
-                db_size = db_stats.get("database_size_mb", 0)
-                health_report += (
-                    f"💾 Database: 🟢 Healthy ({trades_count} trades, {db_size}MB)\n"
-                )
-            except:
-                health_report += "💾 Database: 🔴 Issues\n"
-
-            # Grid Health
-            grid_healthy = getattr(self.trading_bot, "grid_initialized", False)
-            health_report += (
-                f"🎯 Grid: {'🟢 Active' if grid_healthy else '🔴 Inactive'}\n"
-            )
-
-            # Error Status
-            failures = getattr(self.trading_bot, "consecutive_failures", 0)
-            if failures == 0:
-                health_report += "⚡ Errors: 🟢 No recent failures\n"
-            elif failures < 3:
-                health_report += f"⚡ Errors: ⚠️ {failures} recent failures\n"
-            else:
-                health_report += f"⚡ Errors: 🔴 {failures} consecutive failures\n"
-
-            health_report += f"\n*🕐 Last Check:* {datetime.now().strftime('%H:%M:%S')}"
-            await self.send_reply(message, health_report)
-
-        except Exception as e:
-            await self.send_reply(
-                message, f"❌ Error performing health check: {str(e)[:100]}"
-            )
-
-    async def cmd_performance(self, message):
-        """Get performance summary"""
-        try:
-            performance = self.db_logger.get_performance_summary()
-
-            today = performance.get("today", {})
-            week = performance.get("week", {})
-            uptime = performance.get("session_uptime", 0)
-
-            reply = f"""📈 *Performance*
-
-*🕐 Session:*
-• Uptime: {uptime / 3600:.1f} hours
-
-*📊 Today:*
-• Trades: {today.get("total_trades", 0)}
-• Volume: ${today.get("total_volume", 0):.2f}
-• Commission: ${today.get("total_commission", 0):.4f}
-
-*📈 This Week:*
-• Trades: {week.get("total_trades", 0)}
-• Volume: ${week.get("total_volume", 0):.2f}
-• Avg Trade: ${week.get("avg_trade_size", 0):.2f}
-• Commission Rate: {week.get("commission_rate", 0):.3f}%
-"""
-
-            recent_trades = performance.get("recent_trades", [])
-            if recent_trades:
-                last_trade = recent_trades[0]
-                side_emoji = "🟢" if last_trade["side"] == "BUY" else "🔴"
-                reply += f"\n*🎯 Last Trade:*\n{side_emoji} {last_trade['symbol']} ${last_trade['total_value']:.2f}"
-
-            reply += "\n\n*🗄️ Data from SQLite*"
-            await self.send_reply(message, reply)
-
-        except Exception as e:
-            await self.send_reply(
-                message, f"❌ Error getting performance: {str(e)[:100]}"
-            )
-
-    async def cmd_recent_events(self, message):
-        """Get recent events"""
-        try:
-            events = self.db_logger.get_recent_events(10)
-
-            if not events:
-                await self.send_reply(message, "📋 No recent events.")
-                return
-
-            reply = "📋 *Recent Events:*\n\n"
-
-            for event in events:
-                timestamp = event["timestamp"][:16] if event["timestamp"] else "Unknown"
-                event_type = event["event_type"]
-                severity = event["severity"]
-                message_text = (
-                    event["message"][:50] + "..."
-                    if len(event["message"]) > 50
-                    else event["message"]
-                )
-
-                # Severity emojis
-                severity_emoji = {
-                    "CRITICAL": "🚨",
-                    "ERROR": "❌",
-                    "WARNING": "⚠️",
-                    "INFO": "ℹ️",
-                    "DEBUG": "🔍",
-                }.get(severity, "📝")
-
-                reply += f"{severity_emoji} *{event_type}*\n"
-                reply += f"   {message_text}\n"
-                reply += f"   🕐 {timestamp}\n\n"
-
-            reply += "*🗄️ Source: SQLite*"
-            await self.send_reply(message, reply)
-
-        except Exception as e:
-            await self.send_reply(message, f"❌ Error getting events: {str(e)[:100]}")
-
-    async def cmd_database_stats(self, message):
-        """Get database statistics"""
-        try:
-            stats = self.db_logger.get_database_stats()
-
-            if not stats:
-                await self.send_reply(message, "❌ Could not get database statistics.")
-                return
-
-            reply = f"""🗄️ *Database Statistics*
-
-*📊 Record Counts:*
-• Trades: {stats.get("trades_count", 0):,}
-• Portfolio Snapshots: {stats.get("portfolio_snapshots_count", 0):,}
-• Bot Events: {stats.get("bot_events_count", 0):,}
-• Performance Metrics: {stats.get("performance_metrics_count", 0):,}
-
-*💾 Storage:*
-• Database Size: {stats.get("database_size_mb", 0):.2f} MB
-• Trades (24h): {stats.get("trades_last_24h", 0)}
-
-*🎯 Single Source of Truth*
-All data stored in SQLite
-"""
-
-            await self.send_reply(message, reply)
-
-        except Exception as e:
-            await self.send_reply(
-                message, f"❌ Error getting database stats: {str(e)[:100]}"
-            )
-
-    async def cmd_reset(self, message):
-        """Reset grids"""
-        try:
-            ada_price = self.trading_bot.binance.get_price("ADAUSDT")
-            avax_price = self.trading_bot.binance.get_price("AVAXUSDT")
-
-            if ada_price and avax_price:
-                # Reset grids
-                self.trading_bot.ada_grid.setup_grid(ada_price)
-                self.trading_bot.avax_grid.setup_grid(avax_price)
-
-                # Log to database
-                self.db_logger.log_bot_event(
-                    "GRID_RESET",
-                    f"Grids reset via Telegram - ADA: ${ada_price:.4f}, AVAX: ${avax_price:.4f}",
-                    "TELEGRAM",
-                    "INFO",
-                    {"ada_price": ada_price, "avax_price": avax_price},
-                    self.trading_bot.session_id,
-                )
-
-                await self.send_reply(
-                    message,
-                    f"🔄 *Grids Reset*\n\n"
-                    f"ADA: Fresh grid at ${ada_price:.4f}\n"
-                    f"AVAX: Fresh grid at ${avax_price:.4f}\n"
-                    f"All levels cleared and recreated\n\n"
-                    f"*Reset logged to database*",
-                )
-            else:
-                await self.send_reply(
-                    message, "❌ Could not get current prices for reset"
-                )
-
-        except Exception as e:
-            await self.send_reply(message, f"❌ Error resetting grids: {str(e)[:100]}")
-
-    async def cmd_help(self, message):
-        """Show help"""
-        await self.cmd_start(message)
-
     def get_uptime(self) -> str:
-        """Get formatted uptime"""
+        """Get bot uptime"""
         try:
             if hasattr(self.trading_bot, "start_time"):
                 uptime_seconds = time.time() - self.trading_bot.start_time
                 hours = int(uptime_seconds // 3600)
                 minutes = int((uptime_seconds % 3600) // 60)
-                if hours > 0:
-                    return f"{hours}h {minutes}m"
-                else:
-                    return f"{minutes}m"
+                return f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
             return "Unknown"
         except:
             return "Unknown"
