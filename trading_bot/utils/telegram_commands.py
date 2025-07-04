@@ -24,9 +24,12 @@ class TelegramBotCommands:
             "/status": self.cmd_simple_status,
             "/risk": self.cmd_risk_status,
             "/reset": self.cmd_reset,
-            "/grid": self.cmd_grid_visualization,  # Phase 1: Grid visualization
-            "/compound": self.cmd_compound_status,  # Phase 2: Compound interest ✅ FIXED!
+            "/grid": self.cmd_grid_visualization,
+            "/profit": self.cmd_profit,  # NEW: Simple profit tracking
             "/help": self.cmd_start,
+            "/test_compound": self.cmd_test_compound,
+            "/sync_compound": self.cmd_sync_compound,
+            # REMOVED: /compound command (was broken)
         }
 
         self.last_update_id = 0
@@ -39,40 +42,36 @@ class TelegramBotCommands:
     # =============================================================================
 
     async def cmd_start(self, message):
-        """Complete start/help command with compounding info"""
+        """Updated start/help command"""
         try:
             uptime = self.get_uptime()
             risk_info = self.trading_bot.risk_manager.get_risk_status()
-            compound_info = self.trading_bot.compound_manager.get_compound_status()
+            profit_stats = self.trading_bot.profit_tracker.get_stats()
 
             mode_emoji = {
                 "NORMAL": "🟢",
-                "CONSERVATIVE": "🟡",
                 "EMERGENCY_STOP": "🔴",
-                "CIRCUIT_BREAKER": "🚨",
             }.get(risk_info["mode"], "❓")
 
-            reply = f"""🤖 **Complete Grid Trading Bot**
+            reply = f"""🤖 **Grid Trading Bot**
 
-**Essential Controls:**
-/stop - Stop trading
-/resume - Resume trading  
-/status - Bot status
-/risk - Risk status
-/reset - Reset grids
+    **Commands:**
+    /stop - Stop trading
+    /resume - Resume trading  
+    /status - Bot status
+    /risk - Risk status
+    /reset - Reset grids
+    /grid - Grid visualization
+    /profit - Trading profit analysis
 
-**Advanced Features:**
-/grid - Grid visualization
-/compound - Compound status
+    **Current Status:**
+    • Bot: {"🟢 Running" if self.trading_bot.running else "🔴 Stopped"}  
+    • Risk: {mode_emoji} {risk_info["mode"]}
+    • Profit: ${profit_stats["total_profit"]} ({profit_stats["total_trades"]} trades)
+    • Uptime: {uptime}
 
-**Current Status:**
-• Bot: {"🟢 Running" if self.trading_bot.running else "🔴 Stopped"}  
-• Risk: {mode_emoji} {risk_info["mode"]} ({risk_info["daily_pnl"]:+.1f}%)
-• Orders: ${compound_info["current_order_size"]:.0f} ({compound_info["profit_increase"]:+.1f}%)
-• Uptime: {uptime}
-
-*Compounding active: Profits → Larger orders*
-"""
+    *Simple, reliable, profitable*
+    """
             await self.send_reply(message, reply)
 
         except Exception as e:
@@ -255,12 +254,11 @@ class TelegramBotCommands:
             await self.send_reply(message, f"❌ Override error: {str(e)[:100]}")
 
     async def cmd_simple_status(self, message):
-        """Simple bot status with compound info"""
+        """Clean bot status without compound confusion"""
         try:
             uptime = self.get_uptime()
             failures = getattr(self.trading_bot, "consecutive_failures", 0)
             risk_info = self.trading_bot.risk_manager.get_risk_status()
-            compound_info = self.trading_bot.compound_manager.get_compound_status()
 
             mode_emoji = {
                 "NORMAL": "🟢",
@@ -279,30 +277,33 @@ class TelegramBotCommands:
                 else 0
             )
 
+            # Profit stats
+            profit_stats = self.trading_bot.profit_tracker.get_stats()
+
             reply = f"""📊 **Bot Status**
 
-**System:**
-• Status: {"🟢 Running" if self.trading_bot.running else "🔴 Stopped"}
-• Uptime: {uptime}
-• Failures: {failures}
+    **System:**
+    • Status: {"🟢 Running" if self.trading_bot.running else "🔴 Stopped"}
+    • Uptime: {uptime}
+    • Failures: {failures}
 
-**Risk:**
-• Mode: {mode_emoji} {risk_info["mode"]}
-• Daily P&L: {risk_info["daily_pnl"]:+.1f}%
-• Daily Trades: {risk_info["daily_trades"]}/{risk_info["risk_limits"]["daily_trade_limit"]}
+    **Risk:**
+    • Mode: {mode_emoji} {risk_info["mode"]}
+    • Daily P&L: {risk_info["daily_pnl"]:+.1f}%
+    • Daily Trades: {risk_info["daily_trades"]}/{risk_info["risk_limits"]["daily_trade_limit"]}
 
-**Grids:**
-• ADA Orders: {ada_orders}
-• AVAX Orders: {avax_orders}
-• Active: {"🟢 Yes" if getattr(self.trading_bot, "grid_initialized", False) else "🔴 No"}
+    **Grids:**
+    • ADA Orders: {ada_orders}
+    • AVAX Orders: {avax_orders}
+    • Active: {"🟢 Yes" if getattr(self.trading_bot, "grid_initialized", False) else "🔴 No"}
 
-**Compounding:**
-• Order Size: ${compound_info["current_order_size"]:.0f} (was ${compound_info["base_order_size"]:.0f})
-• Multiplier: {compound_info["order_multiplier"]:.2f}x
-• Profit Increase: {compound_info["profit_increase"]:+.1f}%
+    **Trading Profit:**
+    • Total: ${profit_stats["total_profit"]}
+    • Trades: {profit_stats["total_trades"]}
+    • Avg: ${profit_stats["avg_per_trade"]}
 
-*Check Binance app for portfolio*
-"""
+    *Use /profit for detailed analysis*
+    """
             await self.send_reply(message, reply)
 
         except Exception as e:
@@ -728,3 +729,139 @@ class TelegramBotCommands:
             return "Unknown"
         except:
             return "Unknown"
+
+    async def cmd_profit(self, message):
+        """Show simple trading profit analysis"""
+        try:
+            stats = self.trading_bot.profit_tracker.get_stats()
+            reply = f"""💰 **Trading Profit Analysis**
+
+**Core Metrics:**
+- Total Profit: ${stats["total_profit"]}
+- Completed Trades: {stats["total_trades"]}
+- Average per Trade: ${stats["avg_per_trade"]}
+
+**Formula:**
+✅ (sell_price - buy_price) × quantity
+✅ FIFO matching (first bought = first sold)
+✅ Pure trading skill measurement
+
+*This excludes market appreciation*
+"""
+
+            await self.send_reply(message, reply)
+
+        except Exception as e:
+            await self.send_reply(message, f"❌ Profit error: {str(e)[:100]}")
+
+    async def cmd_test_compound(self, message):
+        """Test compound state vs database reality"""
+        try:
+            # Get current compound state
+            compound_info = self.trading_bot.compound_manager.get_compound_status()
+
+            # Get database profit (like profit tracker does)
+            profit_stats = self.trading_bot.profit_tracker.get_stats()
+
+            # Calculate what compound SHOULD be based on database
+            accumulated_profit = profit_stats["total_profit"]  # $19.87
+            base_size = 100.0
+            reinvestment_rate = 0.3
+
+            # Formula: new_multiplier = 1.0 + (accumulated_profit * reinvestment_rate / base_size)
+            expected_multiplier = 1.0 + (
+                accumulated_profit * reinvestment_rate / base_size
+            )
+            expected_order_size = base_size * expected_multiplier
+
+            reply = f"""🧪 **Compound Database Test**
+
+    **Current Compound State:**
+    • Order Size: ${compound_info["current_order_size"]:.2f}
+    • Multiplier: {compound_info["order_multiplier"]:.3f}x
+    • Accumulated: ${compound_info["accumulated_profit"]:.2f}
+
+    **Database Reality:**
+    • Total Profit: ${accumulated_profit:.2f}
+    • Expected Multiplier: {expected_multiplier:.3f}x
+    • Expected Order Size: ${expected_order_size:.2f}
+
+    **Diagnosis:**
+    """
+
+            if abs(compound_info["current_order_size"] - expected_order_size) < 1:
+                reply += "✅ **MATCH** - Compound state matches database reality"
+            else:
+                reply += "❌ **MISMATCH** - Compound lost database state on restart"
+                reply += f"\nShould be: ${expected_order_size:.2f} orders"
+                reply += (
+                    f"\nActually is: ${compound_info['current_order_size']:.2f} orders"
+                )
+
+            reply += """
+
+    **Fix Available:**
+    Use `/sync_compound` to sync compound with database
+    """
+
+            await self.send_reply(message, reply)
+
+        except Exception as e:
+            await self.send_reply(message, f"❌ Test error: {str(e)[:100]}")
+
+    # =============================================================================
+    # STEP 2: Add Database Sync Command
+    # =============================================================================
+    # File: trading_bot/utils/telegram_commands.py
+
+    async def cmd_sync_compound(self, message):
+        """Sync compound state with database profit"""
+        try:
+            # Get database profit
+            profit_stats = self.trading_bot.profit_tracker.get_stats()
+            accumulated_profit = profit_stats["total_profit"]
+
+            # Calculate what compound should be
+            base_size = self.trading_bot.compound_manager.base_order_size
+            reinvestment_rate = 0.3
+
+            expected_multiplier = 1.0 + (
+                accumulated_profit * reinvestment_rate / base_size
+            )
+            expected_order_size = base_size * expected_multiplier
+
+            # Update compound manager
+            old_multiplier = self.trading_bot.compound_manager.current_order_multiplier
+            old_profit = self.trading_bot.compound_manager.accumulated_profit
+
+            self.trading_bot.compound_manager.accumulated_profit = accumulated_profit
+            self.trading_bot.compound_manager.current_order_multiplier = (
+                expected_multiplier
+            )
+
+            # Update grid order sizes
+            self.trading_bot.ada_grid.base_order_size = expected_order_size
+            self.trading_bot.avax_grid.base_order_size = expected_order_size
+
+            reply = f"""🔄 **Compound Synced with Database**
+
+    **Before Sync:**
+    • Order Size: ${base_size * old_multiplier:.2f}
+    • Multiplier: {old_multiplier:.3f}x
+    • Accumulated: ${old_profit:.2f}
+
+    **After Sync:**
+    • Order Size: ${expected_order_size:.2f}
+    • Multiplier: {expected_multiplier:.3f}x
+    • Accumulated: ${accumulated_profit:.2f}
+
+    **Result:** Compound now matches your real trading profits!
+    Next orders will be ${expected_order_size:.0f} instead of $100.
+
+    Test with `/test_compound` to verify.
+    """
+
+            await self.send_reply(message, reply)
+
+        except Exception as e:
+            await self.send_reply(message, f"❌ Sync error: {str(e)[:100]}")

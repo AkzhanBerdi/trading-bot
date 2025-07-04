@@ -9,6 +9,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from utils.database_logger import DatabaseLogger
+from utils.simple_profit_tracker import SimpleProfitTracker
 from utils.telegram_commands import TelegramBotCommands
 
 
@@ -49,6 +50,8 @@ class TradingBot:
         """Initialize complete trading bot"""
         self.setup_logging()
         self.logger = logging.getLogger(__name__)
+        # Database logging
+        self.db_logger = DatabaseLogger()
 
         # Initialize Binance client
         try:
@@ -59,7 +62,10 @@ class TradingBot:
             raise
 
         # Initialize compound manager FIRST - Phase 2 ✅ FIXED!
-        self.compound_manager = CompoundManager(DatabaseLogger(), base_order_size=100.0)
+        # self.compound_manager = CompoundManager(DatabaseLogger(), base_order_size=100.0)
+        self.compound_manager = CompoundManager(self.db_logger, base_order_size=100.0)
+        self.compound_manager.load_state_from_database("data/trading_history.db")
+
         self.logger.info("🔄 Compound interest initialized")
 
         # Get current compound order size for grid initialization
@@ -69,7 +75,7 @@ class TradingBot:
         # Initialize grid strategies with compound order sizes ✅ FIXED!
         self.ada_grid = GridTrader(
             "ADAUSDT",
-            grid_size_percent=2.5,
+            grid_size_percent=2.0,  # ✅ CHANGED: 2.5 → 2.0%
             num_grids=8,
             base_order_size=current_order_size,  # Use compound size!
         )
@@ -79,6 +85,7 @@ class TradingBot:
             num_grids=8,
             base_order_size=current_order_size,  # Use compound size!
         )
+        self.profit_tracker = SimpleProfitTracker(db_path="data/trading_history.db")
 
         # Bot state
         self.running = False
@@ -87,9 +94,6 @@ class TradingBot:
         self.session_id = f"session_{int(time.time())}_{os.getpid()}"
         self.consecutive_failures = 0
         self.max_consecutive_failures = 5
-
-        # Database logging
-        self.db_logger = DatabaseLogger()
 
         # Risk management
         self.risk_manager = RiskManager(self.db_logger, RiskConfig())
@@ -270,7 +274,7 @@ class TradingBot:
         return await self.execute_grid_order(grid_trader, signal)
 
     async def execute_grid_order(self, grid_trader, signal):
-        """Execute grid order with compound profit tracking ✅ ENHANCED!"""
+        """Execute grid order with simple profit tracking"""
         try:
             symbol = grid_trader.symbol
             action = signal["action"]
@@ -315,40 +319,17 @@ class TradingBot:
 
                 order_id = order.get("orderId", "N/A")
 
-                # Calculate profit for compound interest ✅ ENHANCED!
-                actual_profit = 0
-                trade_pnl = 0
+                # Simple profit tracking
+                profit_from_sell = 0.0
+                if action == "BUY":
+                    self.profit_tracker.record_buy(symbol, filled_quantity, avg_price)
+                elif action == "SELL":
+                    profit_from_sell = self.profit_tracker.record_sell(
+                        symbol, filled_quantity, avg_price
+                    )
 
-                if action == "SELL":
-                    # Calculate actual profit for compound interest
-                    buy_orders = [
-                        o for o in grid_trader.filled_orders if o.get("side") == "BUY"
-                    ]
-                    if buy_orders:
-                        # Use most recent buy for profit calculation
-                        recent_buy = max(
-                            buy_orders, key=lambda x: x.get("timestamp", 0)
-                        )
-                        buy_price = recent_buy.get("price", avg_price * 0.975)
-                        actual_profit = (avg_price - buy_price) * filled_quantity
-                        trade_pnl = 0.5  # Positive for sells
-
-                        # Record profit for compound interest ✅ KEY FIX!
-                        if actual_profit > 0:
-                            self.compound_manager.record_trade_profit(
-                                symbol, action, actual_profit
-                            )
-                            self.logger.info(
-                                f"💰 Recorded ${actual_profit:.2f} profit for compounding"
-                            )
-
-                            # Update grid order sizes if compound adjusted ✅ KEY FIX!
-                            self.update_grid_order_sizes()
-                    else:
-                        trade_pnl = 0.5
-                else:
-                    trade_pnl = 0.1  # Small positive for buy
-
+                # Risk management (simplified)
+                trade_pnl = 0.5 if action == "SELL" else 0.1
                 self.risk_manager.update_daily_pnl(trade_pnl)
 
                 # Log to database
@@ -371,51 +352,21 @@ class TradingBot:
                     "level": signal["level"],
                     "timestamp": time.time(),
                     "order_id": str(order_id),
-                    "profit": actual_profit,  # Track actual profit
                 }
                 grid_trader.filled_orders.append(filled_order)
 
-                # Success notification with compound info
-                if telegram_notifier.enabled:
-                    compound_info = self.compound_manager.get_compound_status()
-                    profit_msg = (
-                        f" (${actual_profit:.2f} profit)" if actual_profit > 0 else ""
-                    )
-
-                    await telegram_notifier.notify_trade_success(
-                        symbol=symbol,
-                        action=action,
-                        price=avg_price,
-                        quantity=filled_quantity,
-                        order_id=str(order_id),
-                    )
-
-                    # Send compound update if order size changed
-                    if actual_profit > 0:
-                        await telegram_notifier.notify_info(
-                            f"💰 Compound Update\n"
-                            f"Profit: ${actual_profit:.2f}{profit_msg}\n"
-                            f"Order Size: ${compound_info['current_order_size']:.0f} ({compound_info['order_multiplier']:.2f}x)"
-                        )
-
-                self.logger.info(
-                    f"✅ {action} filled: {filled_quantity} {symbol} @ ${avg_price:.6f}"
-                    f"{profit_msg}"
+                # Log success
+                profit_msg = (
+                    f" (${profit_from_sell:.2f} profit)" if profit_from_sell > 0 else ""
                 )
-                self.consecutive_failures = 0
+                self.logger.info(
+                    f"✅ {action} {filled_quantity} {symbol} @ ${avg_price:.4f}{profit_msg}"
+                )
+
                 return True
 
-            else:
-                error_msg = (
-                    order.get("msg", "Order failed") if order else "Order returned None"
-                )
-                self.logger.error(f"❌ Order failed: {error_msg}")
-                self.consecutive_failures += 1
-                return False
-
         except Exception as e:
-            self.logger.error(f"❌ Order execution error: {e}")
-            self.consecutive_failures += 1
+            self.logger.error(f"❌ Error executing order: {e}")
             return False
 
     async def run_cycle(self):

@@ -140,3 +140,76 @@ class CompoundManager:
         self.logger.warning(
             f"🔄 Compound reset - was ${old_profit:.2f} profit, {old_multiplier:.2f}x multiplier"
         )
+
+    def load_state_from_database(self, db_path: str = "data/trading_history.db"):
+        """Load compound state from profit data in database"""
+        try:
+            import sqlite3
+
+            with sqlite3.connect(db_path) as conn:
+                # Calculate total profit using same logic as profit tracker
+                cursor = conn.execute("""
+                    SELECT symbol, side, quantity, price, timestamp 
+                    FROM trades 
+                    ORDER BY timestamp ASC
+                """)
+
+                trades = cursor.fetchall()
+
+                # FIFO profit calculation (same as profit tracker)
+                open_buys = {}
+                total_profit = 0.0
+
+                for trade in trades:
+                    symbol, side, quantity, price, timestamp = trade
+
+                    if side == "BUY":
+                        if symbol not in open_buys:
+                            open_buys[symbol] = []
+                        open_buys[symbol].append({"qty": quantity, "price": price})
+
+                    elif side == "SELL":
+                        if symbol not in open_buys:
+                            continue
+
+                        remaining_qty = quantity
+
+                        while remaining_qty > 0 and open_buys[symbol]:
+                            buy = open_buys[symbol][0]
+                            match_qty = min(buy["qty"], remaining_qty)
+                            profit = (price - buy["price"]) * match_qty
+
+                            if profit > 0:
+                                total_profit += profit
+
+                            remaining_qty -= match_qty
+                            buy["qty"] -= match_qty
+
+                            if buy["qty"] <= 0:
+                                open_buys[symbol].pop(0)
+
+                # Update compound state based on database profit
+                if total_profit >= self.min_profit_threshold:
+                    self.accumulated_profit = total_profit
+
+                    profit_factor = (
+                        total_profit
+                        * self.profit_reinvestment_rate
+                        / self.base_order_size
+                    )
+                    new_multiplier = 1.0 + profit_factor
+                    new_multiplier = min(new_multiplier, self.max_order_size_multiplier)
+
+                    self.current_order_multiplier = new_multiplier
+
+                    self.logger.info(
+                        f"✅ Loaded compound state from database: ${total_profit:.2f} profit, {new_multiplier:.3f}x multiplier"
+                    )
+                else:
+                    self.logger.info(
+                        f"📊 Database profit ${total_profit:.2f} below threshold, keeping base settings"
+                    )
+
+        except Exception as e:
+            self.logger.error(f"❌ Failed to load compound state from database: {e}")
+            self.logger.info("📊 Using default compound settings")

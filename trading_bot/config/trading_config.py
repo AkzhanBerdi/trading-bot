@@ -71,13 +71,13 @@ config = TradingBotConfig()
 # Simplified asset configurations - match your actual trading pairs
 ASSET_CONFIGS = {
     "ADA": {
-        "grid_size_percent": 2.5,  # 2.5% spacing for ADA
+        "grid_size_percent": 2.0,  # ✅ CHANGED: 2.5 → 2.0% spacing for ADA
         "num_grids": 8,
         "base_order_size": 100.0,
         "symbol": "ADAUSDT",
     },
     "AVAX": {
-        "grid_size_percent": 2.0,  # 2.0% spacing for AVAX
+        "grid_size_percent": 2.0,  # ✅ KEPT: 2.0% spacing for AVAX
         "num_grids": 8,
         "base_order_size": 100.0,
         "symbol": "AVAXUSDT",
