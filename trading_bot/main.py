@@ -294,6 +294,21 @@ class TradingBot:
                 self.logger.warning(f"⚠️ Order value ${order_value:.2f} below minimum")
                 return False
 
+            # 🆕 ADD THIS: Simple position check for BUY orders
+            if action == "BUY":
+                # Get current position using your existing SimpleProfitTracker
+                position = self.profit_tracker.get_position(symbol)
+                current_invested = position.get("total_invested", 0)
+
+                # Set simple limits (adjust these based on your comfort level)
+                MAX_POSITION = {"AVAXUSDT": 1200, "ADAUSDT": 800}  # Max USD per coin
+
+                if current_invested + order_value > MAX_POSITION.get(symbol, 1000):
+                    self.logger.warning(
+                        f"🚫 Position limit reached for {symbol}: ${current_invested:.2f} + ${order_value:.2f} > ${MAX_POSITION.get(symbol, 1000)}"
+                    )
+                    return False
+
             # Execute order
             if action == "BUY":
                 order = self.binance.place_market_buy(symbol, quantity)
