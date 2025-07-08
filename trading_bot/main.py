@@ -135,6 +135,48 @@ class TradingBot:
         )
         self.logger.info("📊 Performance dashboard enabled")
 
+    async def check_live_balance(self, symbol, action, quantity):
+        """CRITICAL: Check live exchange balance before trading"""
+        try:
+            account = self.binance.get_account()
+            if not account:
+                self.logger.error("❌ Cannot get account data - skipping trade")
+                return False
+
+            if action == "SELL":
+                # Check if we have enough coins to sell
+                base_asset = symbol.replace("USDT", "")  # ADA from ADAUSDT
+                for balance in account["balances"]:
+                    if balance["asset"] == base_asset:
+                        available = float(balance["free"])
+                        if available < quantity:
+                            self.logger.warning(
+                                f"🚫 Insufficient {base_asset}: {available:.2f} < {quantity:.2f}"
+                            )
+                            return False
+                        break
+
+            elif action == "BUY":
+                # Check if we have enough USDT to buy
+                current_price = self.binance.get_price(symbol)
+                usdt_needed = quantity * current_price
+
+                for balance in account["balances"]:
+                    if balance["asset"] == "USDT":
+                        available = float(balance["free"])
+                        if available < usdt_needed:
+                            self.logger.warning(
+                                f"🚫 Insufficient USDT: ${available:.2f} < ${usdt_needed:.2f}"
+                            )
+                            return False
+                        break
+
+            return True
+
+        except Exception as e:
+            self.logger.error(f"❌ Balance check failed: {e}")
+            return False
+
     def setup_logging(self):
         """Minimal console logging only"""
         log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -319,11 +361,23 @@ class TradingBot:
         return await self.execute_grid_order(grid_trader, signal)
 
     async def execute_grid_order(self, grid_trader, signal):
-        """Execute grid order with simple profit tracking"""
+        """Execute grid order with live balance check - CORRECTED for your database"""
         try:
             symbol = grid_trader.symbol
-            action = signal["action"]
+            action = signal["action"]  # Keep as 'action' in code
             quantity = signal["quantity"]
+
+            # ADD THIS: Check for duplicate trades
+            if hasattr(grid_trader, "is_duplicate_trade"):
+                if grid_trader.is_duplicate_trade(action, signal["price"], quantity):
+                    self.logger.warning(
+                        f"🚫 Duplicate trade prevented: {action} {quantity} {symbol}"
+                    )
+                    return False
+
+            # CRITICAL: Check live balance FIRST
+            if not await self.check_live_balance(symbol, action, quantity):
+                return False
 
             # Precision fix
             if symbol == "ADAUSDT":
@@ -338,21 +392,6 @@ class TradingBot:
             if order_value < 8:
                 self.logger.warning(f"⚠️ Order value ${order_value:.2f} below minimum")
                 return False
-
-            # 🆕 ADD THIS: Simple position check for BUY orders
-            if action == "BUY":
-                # Get current position using your existing SimpleProfitTracker
-                position = self.profit_tracker.get_position(symbol)
-                current_invested = position.get("total_invested", 0)
-
-                # Set simple limits (adjust these based on your comfort level)
-                MAX_POSITION = {"AVAXUSDT": 1200, "ADAUSDT": 800}  # Max USD per coin
-
-                if current_invested + order_value > MAX_POSITION.get(symbol, 1000):
-                    self.logger.warning(
-                        f"🚫 Position limit reached for {symbol}: ${current_invested:.2f} + ${order_value:.2f} > ${MAX_POSITION.get(symbol, 1000)}"
-                    )
-                    return False
 
             # Execute order
             if action == "BUY":
@@ -378,6 +417,7 @@ class TradingBot:
                     avg_price = current_price
 
                 order_id = order.get("orderId", "N/A")
+                total_value = filled_quantity * avg_price
 
                 # Simple profit tracking
                 profit_from_sell = 0.0
@@ -392,16 +432,80 @@ class TradingBot:
                 trade_pnl = 0.5 if action == "SELL" else 0.1
                 self.risk_manager.update_daily_pnl(trade_pnl)
 
-                # Log to database
-                trade_id = self.db_logger.log_trade_execution(
-                    symbol=symbol,
-                    side=action,
-                    quantity=filled_quantity,
-                    price=avg_price,
-                    order_result=order,
-                    grid_level=signal["level"],
-                    session_id=self.session_id,
-                )
+                # CORRECTED DATABASE LOGGING - Use your actual schema
+                try:
+                    # Use direct database insert with your column names
+                    import sqlite3
+                    from datetime import datetime
+
+                    conn = sqlite3.connect("data/trading_history.db")
+                    cursor = conn.cursor()
+
+                    # Insert using YOUR actual column names
+                    cursor.execute(
+                        """
+                    INSERT INTO trades (
+                        timestamp, datetime, symbol, side, quantity, price, total_value,
+                        order_id, grid_level, status, session_id, notes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                        (
+                            datetime.now().isoformat(),  # timestamp
+                            datetime.now().isoformat(),  # datetime
+                            symbol,
+                            action,  # side (BUY/SELL)
+                            filled_quantity,  # quantity
+                            avg_price,  # price
+                            total_value,  # total_value (not 'value')
+                            str(order_id),  # order_id
+                            signal.get("level", 0),  # grid_level
+                            "FILLED",  # status
+                            self.session_id,  # session_id
+                            f"Grid level {signal.get('level', 0)}",  # notes
+                        ),
+                    )
+
+                    conn.commit()
+                    conn.close()
+
+                    self.logger.info(
+                        f"✅ DB: {action} {filled_quantity} {symbol} @ ${avg_price:.4f}"
+                    )
+
+                except Exception as db_error:
+                    self.logger.error(f"❌ Database logging failed: {db_error}")
+
+                # EMERGENCY FILE LOGGING (backup)
+                try:
+                    import json
+                    from datetime import datetime
+                    from pathlib import Path
+
+                    # Ensure directory exists
+                    Path("data").mkdir(exist_ok=True)
+
+                    emergency_trade = {
+                        "timestamp": datetime.now().isoformat(),
+                        "symbol": symbol,
+                        "side": action,  # Use 'side' to match your schema
+                        "quantity": filled_quantity,
+                        "price": avg_price,
+                        "total_value": total_value,  # Use 'total_value' to match your schema
+                        "order_id": str(order_id),
+                        "profit": profit_from_sell if action == "SELL" else 0.0,
+                        "grid_level": signal.get("level", 0),
+                        "session_id": self.session_id,
+                    }
+
+                    with open("data/emergency_trades.jsonl", "a") as f:
+                        f.write(json.dumps(emergency_trade) + "\n")
+
+                    self.logger.info(
+                        f"📝 Emergency: {action} {filled_quantity} {symbol}"
+                    )
+
+                except Exception as file_error:
+                    self.logger.error(f"❌ File logging failed: {file_error}")
 
                 # Update grid state
                 filled_order = {
@@ -422,20 +526,6 @@ class TradingBot:
                 self.logger.info(
                     f"✅ {action} {filled_quantity} {symbol} @ ${avg_price:.4f}{profit_msg}"
                 )
-
-                # 🆕 ADD THIS: Telegram notification for successful trades
-                if self.telegram_notifier.enabled:
-                    try:
-                        await self.telegram_notifier.notify_trade_success(
-                            symbol=symbol,
-                            action=action,
-                            price=avg_price,
-                            quantity=filled_quantity,
-                            order_id=str(order_id),
-                            profit=profit_from_sell if action == "SELL" else None,
-                        )
-                    except Exception as e:
-                        self.logger.warning(f"⚠️ Telegram notification failed: {e}")
 
                 return True
 

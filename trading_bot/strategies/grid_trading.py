@@ -39,6 +39,9 @@ class GridTrader:
         self.center_price = None  # Track grid center for reset logic
         self.last_reset_time = 0  # Prevent too frequent resets
 
+        self.recent_trades = {}
+        self.trade_cooldown = 30
+
     def setup_grid(self, current_price: float) -> Dict:
         """Setup grid levels around current price"""
         self.center_price = current_price  # ✅ ADDED for auto-reset
@@ -249,6 +252,24 @@ class GridTrader:
             return reset_info
 
         return {"reset": False}
+
+    def is_duplicate_trade(self, action, price, quantity):
+        import time
+
+        trade_key = f"{action}_{price:.4f}_{quantity:.4f}"
+        current_time = time.time()
+
+        if trade_key in self.recent_trades:
+            time_since_trade = current_time - self.recent_trades[trade_key]
+            if time_since_trade < self.trade_cooldown:
+                return True
+
+        self.recent_trades[trade_key] = current_time
+        cutoff_time = current_time - 3600
+        self.recent_trades = {
+            k: v for k, v in self.recent_trades.items() if v > cutoff_time
+        }
+        return False
 
 
 def test_grid_strategy():
