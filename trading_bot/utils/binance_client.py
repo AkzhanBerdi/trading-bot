@@ -1,4 +1,4 @@
-"""Enhanced Binance client with timestamp handling"""
+"""Enhanced Binance client with simplified timestamp handling"""
 
 import logging
 import os
@@ -6,7 +6,6 @@ import time
 
 import requests
 from binance.client import Client
-from binance.exceptions import BinanceAPIException
 from dotenv import load_dotenv
 
 
@@ -24,11 +23,25 @@ class BinanceManager:
             # Initialize client
             self.client = Client(self.api_key, self.secret_key, testnet=self.testnet)
 
-            # Time synchronization
-            self.time_offset = 0
-            self.last_sync = 0
-            self.sync_interval = 30  # seconds
-            self._sync_time_offset()
+            # SIMPLE TIMESTAMP FIX - Set offset once
+            try:
+                base_url = (
+                    "https://testnet.binance.vision"
+                    if self.testnet
+                    else "https://api.binance.com"
+                )
+                server_response = requests.get(f"{base_url}/api/v3/time", timeout=10)
+                server_time = server_response.json()["serverTime"]
+                local_time = int(time.time() * 1000)
+
+                # Set client timestamp offset
+                self.client.timestamp_offset = server_time - local_time
+                print(f"🔄 Timestamp offset set: {self.client.timestamp_offset}ms")
+
+            except Exception as e:
+                print(f"⚠️ Could not sync timestamp: {e}")
+                # Fallback: set a conservative offset
+                self.client.timestamp_offset = -5000  # 5 seconds behind
 
             self.logger = logging.getLogger(__name__)
             self.logger.info(f"✅ Binance client initialized (testnet: {self.testnet})")
@@ -36,79 +49,22 @@ class BinanceManager:
         except Exception as e:
             raise ConnectionError(f"Failed to connect to Binance: {e}")
 
-    def _sync_time_offset(self):
-        """Calculate time offset with Binance servers"""
-        try:
-            base_url = (
-                "https://testnet.binance.vision"
-                if self.testnet
-                else "https://api.binance.com"
-            )
-            response = requests.get(f"{base_url}/api/v3/time", timeout=10)
-
-            if response.status_code == 200:
-                server_time = response.json()["serverTime"]
-                local_time = int(time.time() * 1000)
-                self.time_offset = server_time - local_time
-                self.last_sync = time.time()
-
-                if hasattr(self, "logger"):
-                    self.logger.info(f"🔄 Time offset synced: {self.time_offset}ms")
-                else:
-                    print(f"🔄 Time offset synced: {self.time_offset}ms")
-                return True
-        except Exception as e:
-            if hasattr(self, "logger"):
-                self.logger.warning(f"⚠️ Time sync failed: {e}")
-            else:
-                print(f"⚠️ Time sync failed: {e}")
-        return False
-
-    def _get_timestamp(self):
-        """Get corrected timestamp"""
-        # Re-sync if needed
-        if time.time() - self.last_sync > self.sync_interval:
-            self._sync_time_offset()
-
-        return int(time.time() * 1000) + self.time_offset
-
     def _make_authenticated_request(self, method_name, max_retries=3, **kwargs):
-        """Make authenticated request with timestamp retry logic"""
+        """Simple authenticated request - let the client handle timestamps"""
         method = getattr(self.client, method_name)
 
-        for attempt in range(max_retries):
-            try:
-                # Add corrected timestamp and larger recv window
-                if "timestamp" not in kwargs:
-                    kwargs["timestamp"] = self._get_timestamp()
-                if "recvWindow" not in kwargs:
-                    kwargs["recvWindow"] = 60000  # 60 second window
+        # Set large receive window and let client handle timestamp
+        kwargs["recvWindow"] = 60000
 
-                return method(**kwargs)
+        # Remove any manual timestamp - let the client handle it
+        if "timestamp" in kwargs:
+            del kwargs["timestamp"]
 
-            except BinanceAPIException as e:
-                if e.code == -1021:  # Timestamp error
-                    self.logger.warning(f"⚠️ Timestamp error on attempt {attempt + 1}")
-                    if attempt < max_retries - 1:
-                        self.logger.info("🔄 Re-syncing time and retrying...")
-                        self._sync_time_offset()
-                        kwargs["timestamp"] = self._get_timestamp()
-                        time.sleep(0.5)
-                        continue
-                    else:
-                        self.logger.error("❌ All timestamp retry attempts failed")
-                        raise e
-                else:
-                    raise e
-            except Exception as e:
-                self.logger.error(f"❌ Unexpected error on attempt {attempt + 1}: {e}")
-                if attempt < max_retries - 1:
-                    time.sleep(0.5)
-                    continue
-                else:
-                    raise e
-
-        return None
+        try:
+            return method(**kwargs)
+        except Exception as e:
+            self.logger.error(f"Request failed: {e}")
+            raise e
 
     def test_connection(self):
         """Test API connection"""
@@ -212,11 +168,8 @@ class BinanceManager:
                 }
 
             # For live trading, place actual order
-            order = self.client.order_market_buy(
-                symbol=symbol,
-                quantity=quantity,
-                timestamp=self._get_timestamp(),
-                recvWindow=60000,
+            order = self._make_authenticated_request(
+                "order_market_buy", symbol=symbol, quantity=quantity
             )
             self.logger.info(f"Market buy order placed: {order}")
             return order
@@ -262,11 +215,8 @@ class BinanceManager:
                 }
 
             # For live trading, place actual order
-            order = self.client.order_market_sell(
-                symbol=symbol,
-                quantity=quantity,
-                timestamp=self._get_timestamp(),
-                recvWindow=60000,
+            order = self._make_authenticated_request(
+                "order_market_sell", symbol=symbol, quantity=quantity
             )
             self.logger.info(f"Market sell order placed: {order}")
             return order
