@@ -113,6 +113,28 @@ class TradingBot:
         self.sell_loss_tolerance = 0.01  # 1% max loss on sells
         self.buy_premium_tolerance = 0.02  # 2% max premium on buys
 
+        from utils.dynamic_sizing import VolatilityOrderSizer
+
+        self.volatility_sizer = VolatilityOrderSizer(self.binance)
+        self.logger.info("📊 Volatility-based order sizing enabled")
+
+        # Add market timing
+        from utils.market_timing import MarketTimer
+
+        self.market_timer = MarketTimer()
+        self.logger.info("⏰ Market timing optimization enabled")
+
+        # Add performance dashboard
+        from utils.performance_dashboard import PerformanceDashboard
+
+        self.dashboard = PerformanceDashboard(
+            self.profit_tracker,
+            self.compound_manager,
+            self.telegram_notifier,
+            self.db_logger,
+        )
+        self.logger.info("📊 Performance dashboard enabled")
+
     def setup_logging(self):
         """Minimal console logging only"""
         log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -202,36 +224,54 @@ class TradingBot:
             return False
 
     async def check_grid_strategies(self):
-        """Check grid strategies"""
-        # ADA Grid
+        """Enhanced grid checking with auto-reset"""
         try:
+            # Get current prices
             ada_price = self.binance.get_price("ADAUSDT")
-            if ada_price:
-                self.logger.info(f"🔸 ADA: ${ada_price:.4f}")
-                ada_signals = self.ada_grid.check_signals(ada_price)
-
-                for signal in ada_signals:
-                    success = await self.execute_smart_grid_order(self.ada_grid, signal)
-                    if success:
-                        break
-        except Exception as e:
-            self.logger.error(f"❌ ADA grid error: {e}")
-
-        # AVAX Grid
-        try:
             avax_price = self.binance.get_price("AVAXUSDT")
-            if avax_price:
-                self.logger.info(f"🔸 AVAX: ${avax_price:.4f}")
-                avax_signals = self.avax_grid.check_signals(avax_price)
 
-                for signal in avax_signals:
-                    success = await self.execute_smart_grid_order(
-                        self.avax_grid, signal
-                    )
-                    if success:
-                        break
+            # Check for grid resets FIRST
+            ada_reset = self.ada_grid.auto_reset_grid(ada_price)
+            if ada_reset["reset"]:
+                self.logger.info(f"🔄 ADA grid auto-reset: {ada_reset['reason']}")
+
+            avax_reset = self.avax_grid.auto_reset_grid(avax_price)
+            if avax_reset["reset"]:
+                self.logger.info(f"🔄 AVAX grid auto-reset: {avax_reset['reason']}")
+            # ADA Grid
+            try:
+                ada_price = self.binance.get_price("ADAUSDT")
+                if ada_price:
+                    self.logger.info(f"🔸 ADA: ${ada_price:.4f}")
+                    ada_signals = self.ada_grid.check_signals(ada_price)
+
+                    for signal in ada_signals:
+                        success = await self.execute_smart_grid_order(
+                            self.ada_grid, signal
+                        )
+                        if success:
+                            break
+            except Exception as e:
+                self.logger.error(f"❌ ADA grid error: {e}")
+
+            # AVAX Grid
+            try:
+                avax_price = self.binance.get_price("AVAXUSDT")
+                if avax_price:
+                    self.logger.info(f"🔸 AVAX: ${avax_price:.4f}")
+                    avax_signals = self.avax_grid.check_signals(avax_price)
+
+                    for signal in avax_signals:
+                        success = await self.execute_smart_grid_order(
+                            self.avax_grid, signal
+                        )
+                        if success:
+                            break
+            except Exception as e:
+                self.logger.error(f"❌ AVAX grid error: {e}")
+
         except Exception as e:
-            self.logger.error(f"❌ AVAX grid error: {e}")
+            self.logger.error(f"Grid strategy check failed: {e}")
 
     async def execute_smart_grid_order(self, grid_trader, signal):
         """Execute grid order with basic risk checks"""
@@ -404,7 +444,7 @@ class TradingBot:
             return False
 
     async def run_cycle(self):
-        """Main trading cycle"""
+        """Enhanced trading cycle with daily summary"""
         try:
             # Initialize grids on first cycle
             if not self.grid_initialized:
@@ -424,6 +464,9 @@ class TradingBot:
 
             # Core trading logic
             await self.check_grid_strategies()
+            if self.dashboard.should_send_daily_summary():
+                asyncio.create_task(self.dashboard.generate_daily_summary())
+
             return True
 
         except Exception as e:
@@ -432,20 +475,21 @@ class TradingBot:
             return False
 
     async def run(self):
-        """Main bot loop"""
-        self.logger.info("🚀 Starting complete trading bot with compound interest...")
+        """Main bot loop with intelligent timing - ENHANCED"""
+        self.logger.info("🚀 Starting enhanced trading bot with intelligent timing...")
 
         # Log bot start
         compound_info = self.compound_manager.get_compound_status()
         self.db_logger.log_bot_event(
             "BOT_START",
-            "Complete trading bot started with compound interest",
+            "Complete trading bot started with compound interest and intelligent timing",
             "INFO",
             {
                 "session_id": self.session_id,
-                "version": "complete_v1.0",
+                "version": "enhanced_v1.1",
                 "initial_order_size": compound_info["current_order_size"],
                 "compound_multiplier": compound_info["order_multiplier"],
+                "intelligent_timing": True,
             },
             self.session_id,
         )
@@ -456,16 +500,22 @@ class TradingBot:
         )
         self.logger.info("🤖 Telegram commands active (with compounding)")
 
-        # Startup notification
+        # Startup notification with market timing info
         if self.telegram_notifier.enabled:
             try:
                 compound_info = self.compound_manager.get_compound_status()
+
+                # Get current market session info
+                market_info = self.market_timer.get_market_session_info()
+
                 await self.telegram_notifier.notify_bot_status(
                     "started",
-                    "🤖 Complete Trading Bot Online!\n"
+                    "🤖 Enhanced Trading Bot Online!\n"
                     "✅ Grid trading with compound interest\n"
                     f"✅ Order size: ${compound_info['current_order_size']:.0f} ({compound_info['order_multiplier']:.2f}x)\n"
                     "✅ Automatic profit growth\n"
+                    f"✅ Market session: {market_info['session']} ({market_info['activity_level']})\n"
+                    f"✅ Trading intensity: {market_info['trading_intensity']:.1f}x\n"
                     "Commands: /start for help",
                 )
             except Exception as e:
@@ -476,7 +526,7 @@ class TradingBot:
             self.logger.error("❌ Binance connection failed")
             return
 
-        # Main loop
+        # Main loop with intelligent timing
         self.running = True
         cycle_count = 0
 
@@ -484,7 +534,14 @@ class TradingBot:
             while True:
                 if self.running:
                     cycle_count += 1
-                    self.logger.info(f"📊 Cycle {cycle_count}")
+
+                    # Get current market session info for this cycle
+                    market_info = self.market_timer.get_market_session_info()
+
+                    self.logger.info(
+                        f"📊 Cycle {cycle_count} | "
+                        f"Market: {market_info['session']} ({market_info['activity_level']})"
+                    )
 
                     try:
                         await self.run_cycle()
@@ -503,10 +560,33 @@ class TradingBot:
                         self.running = False
                         continue
 
-                    await asyncio.sleep(15)
+                    # ✅ INTELLIGENT TIMING - Replace fixed 15-second sleep
+                    base_sleep_time = 15.0  # Base cycle time
+                    optimal_sleep = self.market_timer.get_optimal_sleep_time(
+                        base_sleep_time
+                    )
+
+                    # Update market info after potential changes
+                    market_info = self.market_timer.get_market_session_info()
+
+                    # Log timing decision (debug level to avoid spam)
+                    self.logger.debug(
+                        f"⏰ Market: {market_info['session']} ({market_info['activity_level']}) "
+                        f"- Intensity: {market_info['trading_intensity']:.1f}x "
+                        f"- Sleep: {optimal_sleep:.1f}s"
+                    )
+
+                    # Show timing info every 10 cycles or when session changes
+                    if cycle_count % 10 == 0 or market_info["trading_intensity"] != 1.0:
+                        self.logger.info(
+                            f"⏰ Trading intensity: {market_info['trading_intensity']:.1f}x "
+                            f"(sleep: {optimal_sleep:.1f}s) - {market_info['session']}"
+                        )
+
+                    await asyncio.sleep(optimal_sleep)
 
                 else:
-                    # Check for restart request
+                    # Check for restart request (use shorter sleep when stopped)
                     if getattr(self.telegram_commands, "restart_requested", False):
                         self.logger.info("🔄 Restart requested, resuming...")
                         self.running = True
@@ -514,7 +594,7 @@ class TradingBot:
                         self.consecutive_failures = 0
                         continue
 
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(5)  # Keep short sleep when stopped
 
         except KeyboardInterrupt:
             self.logger.info("👋 Shutting down...")
@@ -525,11 +605,13 @@ class TradingBot:
             self.telegram_commands.stop_command_processor()
             command_task.cancel()
 
-            # Log bot stop with compound stats
+            # Log bot stop with compound stats and timing info
             compound_info = self.compound_manager.get_compound_status()
+            final_market_info = self.market_timer.get_market_session_info()
+
             self.db_logger.log_bot_event(
                 "BOT_STOP",
-                "Bot stopped",
+                "Enhanced bot stopped",
                 "INFO",
                 {
                     "total_cycles": cycle_count,
@@ -537,21 +619,24 @@ class TradingBot:
                     "final_order_size": compound_info["current_order_size"],
                     "final_multiplier": compound_info["order_multiplier"],
                     "total_accumulated_profit": compound_info["accumulated_profit"],
+                    "final_market_session": final_market_info["session"],
+                    "final_trading_intensity": final_market_info["trading_intensity"],
                 },
                 self.session_id,
             )
 
-            if telegram_notifier.enabled:
+            if self.telegram_notifier.enabled:
                 await self.telegram_notifier.notify_bot_status(
                     "stopped",
-                    f"🛑 Bot Stopped\n"
+                    f"🛑 Enhanced Bot Stopped\n"
                     f"Cycles: {cycle_count}\n"
                     f"Time: {time.time() - self.start_time:.0f}s\n"
                     f"Final Order Size: ${compound_info['current_order_size']:.0f}\n"
-                    f"Compound Multiplier: {compound_info['order_multiplier']:.2f}x",
+                    f"Compound Multiplier: {compound_info['order_multiplier']:.2f}x\n"
+                    f"Market Session: {final_market_info['session']} ({final_market_info['activity_level']})",
                 )
 
-            self.logger.info("🛑 Complete bot stopped")
+            self.logger.info("🛑 Enhanced bot stopped with intelligent timing")
 
 
 def main():
