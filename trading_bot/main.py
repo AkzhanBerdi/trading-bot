@@ -40,7 +40,6 @@ from strategies.grid_trading import GridTrader
 from utils.binance_client import BinanceManager
 from utils.compound_manager import CompoundManager  # Phase 2 enhancement
 from utils.risk_manager import RiskConfig, RiskManager
-from utils.telegram_notifier import telegram_notifier
 
 
 class TradingBot:
@@ -50,6 +49,12 @@ class TradingBot:
         """Initialize complete trading bot"""
         self.setup_logging()
         self.logger = logging.getLogger(__name__)
+
+        # Import telegram notifier AFTER environment is loaded
+        from utils.telegram_notifier import telegram_notifier
+
+        self.telegram_notifier = telegram_notifier  # Store as instance variable
+
         # Database logging
         self.db_logger = DatabaseLogger()
 
@@ -101,7 +106,7 @@ class TradingBot:
 
         # Telegram commands
         self.telegram_commands = TelegramBotCommands(
-            self, telegram_notifier, self.db_logger
+            self, self.telegram_notifier, self.db_logger
         )
 
         # Trading configuration
@@ -182,8 +187,8 @@ class TradingBot:
             self.grid_initialized = True
             self.logger.info("✅ Grids created with compound interest")
 
-            if telegram_notifier.enabled:
-                await telegram_notifier.notify_info(
+            if self.telegram_notifier.enabled:
+                await self.telegram_notifier.notify_info(
                     f"🎯 Grids Initialized\n"
                     f"ADA: ${ada_price:.4f} | AVAX: ${avax_price:.4f}\n"
                     f"Order Size: ${compound_info['current_order_size']:.0f} ({compound_info['order_multiplier']:.2f}x)\n"
@@ -378,6 +383,20 @@ class TradingBot:
                     f"✅ {action} {filled_quantity} {symbol} @ ${avg_price:.4f}{profit_msg}"
                 )
 
+                # 🆕 ADD THIS: Telegram notification for successful trades
+                if self.telegram_notifier.enabled:
+                    try:
+                        await self.telegram_notifier.notify_trade_success(
+                            symbol=symbol,
+                            action=action,
+                            price=avg_price,
+                            quantity=filled_quantity,
+                            order_id=str(order_id),
+                            profit=profit_from_sell if action == "SELL" else None,
+                        )
+                    except Exception as e:
+                        self.logger.warning(f"⚠️ Telegram notification failed: {e}")
+
                 return True
 
         except Exception as e:
@@ -438,10 +457,10 @@ class TradingBot:
         self.logger.info("🤖 Telegram commands active (with compounding)")
 
         # Startup notification
-        if telegram_notifier.enabled:
+        if self.telegram_notifier.enabled:
             try:
                 compound_info = self.compound_manager.get_compound_status()
-                await telegram_notifier.notify_bot_status(
+                await self.telegram_notifier.notify_bot_status(
                     "started",
                     "🤖 Complete Trading Bot Online!\n"
                     "✅ Grid trading with compound interest\n"
@@ -523,7 +542,7 @@ class TradingBot:
             )
 
             if telegram_notifier.enabled:
-                await telegram_notifier.notify_bot_status(
+                await self.telegram_notifier.notify_bot_status(
                     "stopped",
                     f"🛑 Bot Stopped\n"
                     f"Cycles: {cycle_count}\n"
