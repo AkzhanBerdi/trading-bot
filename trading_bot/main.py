@@ -1,5 +1,5 @@
-# trading_bot/main.py - FIXED VERSION WITH WORKING COMPOUNDING
-"""Complete Trading Bot - Grid Control + Compound Interest - FIXED"""
+# trading_bot/main.py - CLEAN VERSION (No Emergency Logging)
+"""Complete Trading Bot - Grid Control + Compound Interest - CLEAN"""
 
 import asyncio
 import logging
@@ -38,12 +38,12 @@ env_loaded = find_and_load_env()
 # Local imports
 from strategies.grid_trading import GridTrader
 from utils.binance_client import BinanceManager
-from utils.compound_manager import CompoundManager  # Phase 2 enhancement
+from utils.compound_manager import CompoundManager
 from utils.risk_manager import RiskConfig, RiskManager
 
 
 class TradingBot:
-    """Complete trading bot - grid control + compound interest - FIXED"""
+    """Complete trading bot - grid control + compound interest - CLEAN"""
 
     def __init__(self):
         """Initialize complete trading bot"""
@@ -55,12 +55,12 @@ class TradingBot:
 
         self.telegram_notifier = telegram_notifier
 
-        # FIXED: Initialize error monitoring AFTER telegram notifier
+        # Initialize error monitoring AFTER telegram notifier
         try:
             from utils.error_monitor import setup_error_monitoring
 
             self.error_monitor = setup_error_monitoring(self.telegram_notifier)
-            self.health_task = None  # Store as instance variable
+            self.health_task = None
             self.logger.info("🔍 Error monitoring initialized")
         except Exception as e:
             self.logger.warning(f"⚠️ Error monitoring failed to initialize: {e}")
@@ -78,17 +78,15 @@ class TradingBot:
             self.logger.error(f"❌ Failed to initialize Binance client: {e}")
             raise
 
-        # FIXED: Initialize compound manager with proper error handling
+        # Initialize compound manager with proper error handling
         try:
             self.compound_manager = CompoundManager(
                 self.db_logger, base_order_size=100.0
             )
-
-            # CRITICAL: Load state from database IMMEDIATELY after initialization
+            # Load state from database IMMEDIATELY after initialization
             self.compound_manager.load_state_from_database(
                 "trading_bot/data/trading_history.db"
             )
-
             self.logger.info("🔄 Compound interest initialized")
         except Exception as e:
             self.logger.error(f"❌ Failed to initialize compound manager: {e}")
@@ -104,15 +102,15 @@ class TradingBot:
         # Initialize grid strategies with compound order sizes
         self.ada_grid = GridTrader(
             "ADAUSDT",
-            grid_size_percent=2.0,  # 2.0%
+            grid_size_percent=2.0,
             num_grids=8,
-            base_order_size=current_order_size,  # Use compound size!
+            base_order_size=current_order_size,
         )
         self.avax_grid = GridTrader(
             "AVAXUSDT",
             grid_size_percent=2.0,
             num_grids=8,
-            base_order_size=current_order_size,  # Use compound size!
+            base_order_size=current_order_size,
         )
         self.profit_tracker = SimpleProfitTracker(
             db_path="trading_bot/data/trading_history.db"
@@ -182,7 +180,7 @@ class TradingBot:
 
             if action == "SELL":
                 # Check if we have enough coins to sell
-                base_asset = symbol.replace("USDT", "")  # ADA from ADAUSDT
+                base_asset = symbol.replace("USDT", "")
                 for balance in account["balances"]:
                     if balance["asset"] == base_asset:
                         available = float(balance["free"])
@@ -467,7 +465,7 @@ class TradingBot:
                         symbol, filled_quantity, avg_price
                     )
 
-                # FIXED: Update compound interest from sell profits
+                # Update compound interest from sell profits
                 if action == "SELL" and profit_from_sell > 0:
                     self.compound_manager.record_trade_profit(
                         symbol, action, profit_from_sell
@@ -479,12 +477,12 @@ class TradingBot:
                 trade_pnl = 0.5 if action == "SELL" else 0.1
                 self.risk_manager.update_daily_pnl(trade_pnl)
 
-                # Database logging
+                # Database logging only
                 try:
                     import sqlite3
                     from datetime import datetime
 
-                    conn = sqlite3.connect("data/trading_history.db")
+                    conn = sqlite3.connect("trading_bot/data/trading_history.db")
                     cursor = conn.cursor()
 
                     cursor.execute(
@@ -598,7 +596,7 @@ class TradingBot:
             "INFO",
             {
                 "session_id": self.session_id,
-                "version": "enhanced_v1.1_fixed",
+                "version": "clean_v1.0",
                 "initial_order_size": compound_info["current_order_size"],
                 "compound_multiplier": compound_info["order_multiplier"],
             },

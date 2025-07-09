@@ -1,5 +1,5 @@
-# trading_bot/utils/database_logger.py - MINIMAL VERSION
-"""Minimal Database Logger - Only What We Actually Use"""
+# trading_bot/utils/database_logger.py - CLEAN VERSION (Correct Path)
+"""Minimal Database Logger - Uses trading_bot/data directory"""
 
 import json
 import sqlite3
@@ -11,7 +11,7 @@ from typing import Dict
 class DatabaseLogger:
     """Minimal database logger - only trades and bot events"""
 
-    def __init__(self, db_path: str = "data/trading_history.db"):
+    def __init__(self, db_path: str = "trading_bot/data/trading_history.db"):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.session_start = time.time()

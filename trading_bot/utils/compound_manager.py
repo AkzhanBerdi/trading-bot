@@ -1,5 +1,5 @@
-# trading_bot/utils/compound_manager.py - CLEAN VERSION (No Duplicates)
-"""Simple and Safe Compound Interest Implementation - FIXED"""
+# trading_bot/utils/compound_manager.py - CLEAN VERSION (Correct Path)
+"""Simple and Safe Compound Interest Implementation - CLEAN"""
 
 import logging
 from pathlib import Path
@@ -28,8 +28,8 @@ class CompoundManager:
     def load_state_from_database(
         self, db_path: str = "trading_bot/data/trading_history.db"
     ):
-        """FIXED: Load compound state from profit data in database"""
-        self.logger.info(f"🔄 FIXED: Loading compound state from {db_path}")
+        """Load compound state from profit data in database"""
+        self.logger.info(f"🔄 Loading compound state from {db_path}")
 
         try:
             import sqlite3
@@ -40,8 +40,8 @@ class CompoundManager:
             else:
                 abs_db_path = Path(db_path)
 
-            self.logger.info(f"🔄 FIXED: Using absolute path: {abs_db_path}")
-            self.logger.info(f"🔄 FIXED: Database exists: {abs_db_path.exists()}")
+            self.logger.info(f"🔄 Using absolute path: {abs_db_path}")
+            self.logger.info(f"🔄 Database exists: {abs_db_path.exists()}")
 
             with sqlite3.connect(str(abs_db_path)) as conn:
                 # Get all trades for FIFO calculation
@@ -52,18 +52,18 @@ class CompoundManager:
                 """)
 
                 trades = cursor.fetchall()
-                self.logger.info(f"🔄 FIXED: Found {len(trades)} trades")
+                self.logger.info(f"🔄 Found {len(trades)} trades")
 
                 if len(trades) == 0:
-                    self.logger.info("🔄 FIXED: No trades found, using base settings")
+                    self.logger.info("🔄 No trades found, using base settings")
                     return
 
-                # FIFO profit calculation - EXACT implementation
+                # FIFO profit calculation
                 open_buys = {}
                 total_profit = 0.0
                 profitable_sells = 0
 
-                for i, trade in enumerate(trades):
+                for trade in trades:
                     symbol, side, quantity, price, timestamp = trade
 
                     if side == "BUY":
@@ -96,11 +96,8 @@ class CompoundManager:
                         if sell_profit > 0:
                             profitable_sells += 1
 
-                self.logger.info(f"🔄 FIXED: Calculated profit: ${total_profit:.4f}")
-                self.logger.info(f"🔄 FIXED: Profitable sells: {profitable_sells}")
-                self.logger.info(
-                    f"🔄 FIXED: Threshold: ${self.min_profit_threshold:.2f}"
-                )
+                self.logger.info(f"🔄 Calculated profit: ${total_profit:.4f}")
+                self.logger.info(f"🔄 Profitable sells: {profitable_sells}")
 
                 # Apply compound interest if above threshold
                 if total_profit >= self.min_profit_threshold:
@@ -115,27 +112,26 @@ class CompoundManager:
 
                     self.current_order_multiplier = new_multiplier
 
-                    self.logger.info(f"🔄 FIXED: Profit factor: {profit_factor:.6f}")
-                    self.logger.info(f"🔄 FIXED: New multiplier: {new_multiplier:.6f}")
+                    self.logger.info(f"🔄 Profit factor: {profit_factor:.6f}")
+                    self.logger.info(f"🔄 New multiplier: {new_multiplier:.6f}")
                     self.logger.info(
-                        f"🔄 FIXED: New order size: ${self.base_order_size * new_multiplier:.2f}"
+                        f"🔄 New order size: ${self.base_order_size * new_multiplier:.2f}"
                     )
 
                     self.logger.info(
-                        f"✅ FIXED: Loaded compound state - ${total_profit:.2f} profit, {new_multiplier:.3f}x multiplier"
+                        f"✅ Loaded compound state - ${total_profit:.2f} profit, {new_multiplier:.3f}x multiplier"
                     )
                 else:
                     self.logger.info(
-                        f"📊 FIXED: Profit ${total_profit:.2f} below ${self.min_profit_threshold:.2f} threshold"
+                        f"📊 Profit ${total_profit:.2f} below ${self.min_profit_threshold:.2f} threshold"
                     )
 
         except Exception as e:
-            self.logger.error(f"❌ FIXED: Compound loading failed: {e}")
-            self.logger.error(f"❌ FIXED: Exception type: {type(e).__name__}")
+            self.logger.error(f"❌ Compound loading failed: {e}")
             import traceback
 
-            self.logger.error(f"❌ FIXED: Traceback: {traceback.format_exc()}")
-            self.logger.info("📊 FIXED: Using default compound settings")
+            self.logger.error(f"❌ Traceback: {traceback.format_exc()}")
+            self.logger.info("📊 Using default compound settings")
 
     def record_trade_profit(self, symbol: str, side: str, profit: float) -> None:
         """Record profit from a completed trade"""

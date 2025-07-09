@@ -6,3 +6,16 @@ data/logs/
 .pytest_cache/
 .mypy_cache/
 .venv/
+
+# Debug and cleanup files
+*_diagnostic.py
+*_fix.py
+*_test.py
+cleanup_*.py
+force_*.py
+test_compound*.py
+# Emergency backup files
+*.backup*
+emergency_*.jsonl
+# Root data directory (unused)
+/data/

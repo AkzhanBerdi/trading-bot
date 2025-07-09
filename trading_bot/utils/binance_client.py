@@ -3,6 +3,7 @@
 import logging
 import os
 import time
+from pathlib import Path
 
 import requests
 from binance.client import Client
@@ -11,7 +12,7 @@ from dotenv import load_dotenv
 
 class BinanceManager:
     def __init__(self):
-        load_dotenv()
+        load_dotenv(Path(__file__).parent.parent.parent / ".env")
         self.api_key = os.getenv("BINANCE_API_KEY")
         self.secret_key = os.getenv("BINANCE_SECRET_KEY")
         self.testnet = os.getenv("ENVIRONMENT", "development") == "development"
